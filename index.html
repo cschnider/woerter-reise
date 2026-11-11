@@ -1435,12 +1435,17 @@ const Stimme = {
     });
   },
   /* Spricht text; das Versprechen erfüllt sich am Ende (oder spätestens nach 6 s). */
+  nr: 0,
   async sprich(text, lang) {
     if (!text) return;
+    const nr = ++this.nr;
     const datei = await Aufnahmen.datei(text, lang);
+    if (nr !== this.nr) return;
     if (datei && await this.spiele(datei)) return;
+    if (nr !== this.nr) return; // inzwischen wurde etwas anderes gestartet
     if (!this.kannGeraet()) return;
     await this.bereit();
+    if (nr !== this.nr) return;
     const v = this.waehle(lang);
     // Ohne passende Stimme lieber schweigen: sonst liest die deutsche Standardstimme Französisch vor.
     if (!v && this.stimmen.length) { zeigeStimmeFehlt(lang); return; }
@@ -1461,7 +1466,7 @@ const Stimme = {
   spiele(datei) {
     const p = this.spieler;
     if (!p) return Promise.resolve(false);
-    this.still();
+    this.halt();
     return new Promise(fertig => {
       let lief = false;
       const ende = ok => { clearTimeout(timer); p.onended = p.onerror = null; fertig(ok); };
@@ -1478,7 +1483,9 @@ const Stimme = {
       } catch (e) { ende(false); }
     });
   },
-  still() {
+  /* Alles stoppen, auch ein Vorlesen, das gerade erst lädt. */
+  still() { this.nr++; this.halt(); },
+  halt() {
     try { if (this.spieler) this.spieler.pause(); } catch (e) { /* egal */ }
     try { if (this.kannGeraet()) window.speechSynthesis.cancel(); } catch (e) { /* egal */ }
   },
@@ -2283,13 +2290,13 @@ const pause = ms => new Promise(r => setTimeout(r, ms));
 const zufall = liste => liste[Math.floor(Math.random() * liste.length)];
 
 /* Mündlich: Lösung zeigen, dann selbst bewerten. */
-function loesen(gehoert) {
+function loesen(gehoert, stumm) {
   if (ui.phase !== "frage") return;
   ui.phase = "bewerten";
   stoppeMikro();
   const t = aktuelleTeile();
   zeigeLoesung(t, "", "", "", "");
-  sprichLoesung(t);
+  if (!stumm) sprichLoesung(t);
   $("muendlichBox").hidden = gehoert === undefined;
   $("loesenBtn").parentElement.hidden = gehoert !== undefined;
   $("bewertung").hidden = false;
@@ -2342,7 +2349,7 @@ function starteMikro() {
     const passt = alt.some(x => passtGesprochen(x, t.ziel, t.zielSprache));
     if (passt) {
       info.textContent = `Verstanden: «${alt.find(x => passtGesprochen(x, t.ziel, t.zielSprache))}»`;
-      loesen(true);
+      loesen(true, true); // vorgelesen wird erst in bewerte, sonst laufen zwei Stimmen
       bewerte("r", true);
     } else {
       loesen(true);
