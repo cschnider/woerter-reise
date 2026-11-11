@@ -603,79 +603,6 @@ const FAECHER = {
 };
 
 const UNITS = [
-  { fach: "fr", id: "fr-couleurs", name: "Les couleurs", woerter: `
-rot = rouge
-blau = bleu
-grün = vert
-gelb = jaune
-schwarz = noir
-weiss = blanc
-grau = gris
-braun = marron; brun
-rosa = rose
-orange = orange
-violett = violet
-` },
-  { fach: "fr", id: "fr-famille", name: "La famille", woerter: `
-die Familie = la famille
-die Mutter = la mère
-der Vater = le père
-die Eltern = les parents
-der Bruder = le frère
-die Schwester = la sœur
-der Sohn = le fils
-die Tochter = la fille
-die Grossmutter = la grand-mère
-der Grossvater = le grand-père
-der Onkel = l'oncle # l'oncle ist männlich
-die Tante = la tante
-der Cousin = le cousin
-die Cousine = la cousine
-` },
-  { fach: "fr", id: "fr-ecole", name: "À l'école", woerter: `
-die Schule = l'école # l'école ist weiblich
-das Buch = le livre
-das Heft = le cahier
-der Bleistift = le crayon
-der Kugelschreiber = le stylo
-der Radiergummi = la gomme
-das Lineal = la règle
-die Schere = les ciseaux # immer in der Mehrzahl
-die Schultasche = le sac d'école; le cartable
-der Tisch = la table
-der Stuhl = la chaise
-die Wandtafel = le tableau
-lesen = lire
-schreiben = écrire
-` },
-  { fach: "fr", id: "fr-animaux", name: "Les animaux", woerter: `
-der Hund = le chien
-die Katze = le chat
-das Pferd = le cheval # Mehrzahl: les chevaux
-die Kuh = la vache
-das Schwein = le cochon
-das Schaf = le mouton
-der Vogel = l'oiseau # l'oiseau ist männlich
-der Fisch = le poisson
-die Maus = la souris
-das Kaninchen = le lapin
-die Ente = le canard
-der Bär = l'ours # l'ours ist männlich
-` },
-  { fach: "fr", id: "fr-verbes", name: "Les verbes", woerter: `
-sein = être
-haben = avoir
-gehen = aller
-machen = faire
-spielen = jouer
-essen = manger
-trinken = boire
-sprechen = parler
-wohnen = habiter
-mögen; gern haben = aimer
-sich waschen = se laver
-ich heisse = je m'appelle
-` },
   { fach: "en", id: "en-nw2-u1", name: "Unit 1 – My Town", woerter: `
 // New World 2, Unit 1, S. 16 – Berufe
 der Bäcker; die Bäckerin = baker
@@ -886,7 +813,6 @@ das Piraten-Ehrenwort; das Piratenehrenwort = word of pirate honour
 
 /* Erwartete Anzahl Wörter je Unit – beim Ergänzen nachführen. */
 const KONTROLLE = {
-  "fr-couleurs": 11, "fr-famille": 14, "fr-ecole": 14, "fr-animaux": 12, "fr-verbes": 12,
   "en-nw2-u1": 33, "en-nw2-u2": 36, "en-nw2-u3": 37, "en-nw2-u4": 35, "en-nw2-u5": 35,
 };
 
@@ -1463,9 +1389,25 @@ const Stimme = {
     });
   },
   /* Spielt eine Aufnahme; erfüllt sich mit true, wenn sie lief, sonst false (dann Gerätestimme). */
-  spiele(datei) {
+  /* Aufnahme als Blob holen (kommt offline aus dem Speicher des Service Workers;
+     Safari spielt Medien aus dem Service Worker sonst nicht zuverlässig ab). */
+  blobs: new Map(),
+  async quelle(datei) {
+    if (this.blobs.has(datei)) return this.blobs.get(datei);
+    try {
+      const r = await fetch("audio/" + datei);
+      if (!r.ok) throw new Error(r.status);
+      const url = URL.createObjectURL(await r.blob());
+      this.blobs.set(datei, url);
+      return url;
+    } catch (e) { return "audio/" + datei; }
+  },
+  async spiele(datei) {
     const p = this.spieler;
-    if (!p) return Promise.resolve(false);
+    if (!p) return false;
+    const nr = this.nr;
+    const src = await this.quelle(datei);
+    if (nr !== this.nr) return true; // inzwischen abgelöst: still bleiben, keine Ersatzstimme
     this.halt();
     return new Promise(fertig => {
       let lief = false;
@@ -1474,7 +1416,7 @@ const Stimme = {
       p.onended = () => ende(true);
       p.onerror = () => ende(false);
       try {
-        p.src = "audio/" + datei;
+        p.src = src;
         const tempo = ui.langsam ? 0.75 : 1;
         p.defaultPlaybackRate = tempo; p.playbackRate = tempo;
         p.preservesPitch = true; p.webkitPreservesPitch = true;
@@ -2790,6 +2732,13 @@ $("unitLoeschen").addEventListener("click", () => {
 Speicher.laden();
 Online.laden();
 Stimme.init();
+
+/* Offline: App und Aufnahmen im Gerät ablegen (sw.js). Nur über https oder localhost. */
+try {
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1")) {
+    window.addEventListener("load", () => { navigator.serviceWorker.register("sw.js").catch(() => {}); });
+  }
+} catch (e) { /* ohne Offline weiter */ }
 baueKatalog();
 {
   const s = Speicher.daten.einstellung || {};
