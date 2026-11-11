@@ -2303,7 +2303,7 @@ function loesen(gehoert, stumm) {
   $("bewertung").querySelector(".gewusst").focus({ preventScroll: true });
 }
 
-function bewerte(ergebnis, vomMikro) {
+function bewerte(ergebnis, vomMikro, gehoert) {
   if (ui.phase !== "bewerten") return;
   ui.phase = "antwort";
   const t = aktuelleTeile();
@@ -2313,11 +2313,21 @@ function bewerte(ergebnis, vomMikro) {
   $("muendlichBox").hidden = true;
   $("loesenBtn").parentElement.hidden = false;
   const w = Speicher.rec(t.e.key + "#" + t.dir);
-  const titel = ergebnis === "r" ? (vomMikro ? "🎤 " : "") + zufall(LOB) + " +" + a.neueSterne + " ⭐" : ergebnis === "a" ? "Fast – gut, dass du ehrlich bist!" : "Weiter üben – das schaffst du!";
-  zeigeLoesung(t, ergebnis === "r" ? "gut" : ergebnis === "a" ? "fast" : "schlecht", titel, "", wohinText(ergebnis, a.vorher, a.nachher, w));
+  const titel = ergebnis === "r" ? (vomMikro ? "🎤 " : "") + zufall(LOB) + " +" + a.neueSterne + " ⭐"
+    : vomMikro ? "🎤 Leider nicht – richtig ist:"
+    : ergebnis === "a" ? "Fast – gut, dass du ehrlich bist!" : "Weiter üben – das schaffst du!";
+  const grund = vomMikro && ergebnis !== "r" ? `Ich habe «${gehoert || "…"}» verstanden.` : "";
+  zeigeLoesung(t, ergebnis === "r" ? "gut" : ergebnis === "a" ? "fast" : "schlecht", titel, grund, wohinText(ergebnis, a.vorher, a.nachher, w));
   aktualisiereSpielstand();
   if (ergebnis === "r") feiern(a.serieErreicht);
   const warte = vomMikro ? sprichLoesung(t) : Promise.resolve();
+  $("dochRichtigBtn").hidden = !(vomMikro && ergebnis !== "r");
+  if (vomMikro && ergebnis !== "r") {
+    // Falsch erkannt: stehen bleiben, damit «Das war richtig» möglich ist (falls das Mikrofon sich verhört hat).
+    $("weiterZeile").hidden = false;
+    $("weiterBtn").focus({ preventScroll: true });
+    return;
+  }
   if (ui.warteschlange.length) { setTimeout(zeigeBelohnung, 600); return; }
   Promise.all([warte, pause(ergebnis === "r" ? (a.serieErreicht ? 1500 : 900) : 1400)]).then(() => {
     if (ui.phase === "antwort" && $("overlay").hidden) weiter();
@@ -2352,9 +2362,8 @@ function starteMikro() {
       loesen(true, true); // vorgelesen wird erst in bewerte, sonst laufen zwei Stimmen
       bewerte("r", true);
     } else {
-      loesen(true);
-      info.textContent = `Ich habe «${alt[0] || "…"}» verstanden. Stimmt es trotzdem? Bewerte selbst.`;
-      $("muendlichBox").hidden = false;
+      loesen(true, true);
+      bewerte("f", true, alt[0]);
     }
   };
   rec.onerror = ev => {
