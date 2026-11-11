@@ -1,0 +1,2808 @@
+<!doctype html>
+<html lang="de-CH">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Wörter-Reise">
+<meta name="theme-color" content="#fbf8f3">
+<meta name="robots" content="noindex, nofollow">
+<title>Wörter-Reise</title>
+<!--
+  Wörter-Reise – Französisch- und Englisch-Wörter lernen
+  Ein einziges File, ohne Abhängigkeiten. Aufbau:
+    1. DATEN       – Fächer, Units mit Wörtern (hier ergänzen), Levels
+    2. PARSER      – liest «deutsch = fremd # Notiz», prüft Antworten (Akzent, Artikel, Tippfehler)
+    3. SPEICHER    – Stand je Wort und Richtung, Sterne, Tage, eigene Units (localStorage, immer try/catch)
+    3b. ONLINE     – optional: Spielname + PIN, Abgleich mit Supabase (ONLINE_KONFIG)
+    3c. STIMME     – Aussprache (speechSynthesis) und Mikrofon (SpeechRecognition), beides optional
+    4. LOGIK       – Zustände, Ziehen, Auswerten, Belohnungen
+    5. DARSTELLUNG – Start / Spiel / Ende / Wörterliste / eigene Unit
+  Zustände je Wort und Richtung:
+    ✨ neu      – noch nie gefragt
+    🔥 Hölle    – zuletzt falsch
+    🌀 Wackel   – zuletzt richtig (oder fast), aber noch nicht oft genug in Folge:
+                  nie falsch → 1× richtig reicht; 1× falsch oder fast → 2× in Folge; ab 2× falsch → 3× in Folge
+    ☁️ Himmel   – sitzt
+  «Schwierige» = Wörter, die insgesamt mindestens 2× falsch waren – auch wenn sie inzwischen im Himmel sind.
+  Neue Unit: Eintrag in UNITS anhängen (fach, id eindeutig und nie ändern, name, woerter) und KONTROLLE nachführen.
+  Eine Zeile je Wort: «deutsch = fremd». Mehrere Lösungen mit «;», Teile in (Klammern) sind freiwillig,
+  nach « # » steht eine Notiz, die nach der Antwort erscheint.
+-->
+<style>
+  :root {
+    --bg: #fbf8f3;
+    --card: #ffffff;
+    --ink: #2f3a4a;
+    --muted: #6f7988;
+    --line: #ebe5db;
+    --accent: #4f86e8;
+    --accent-soft: #e7effd;
+    --good: #2b9566;
+    --good-soft: #e2f4ea;
+    --bad: #d2504b;
+    --bad-soft: #fbe8e6;
+    --himmel: #6aa9f0;
+    --hoelle: #ef7b4f;
+    --wackel: #a985e6;
+    --wackel-soft: #f1eafd;
+    --neu: #e3ddd2;
+    --gold: #f0b429;
+    --radius: 18px;
+    --wort: clamp(32px, 7vw, 54px);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Avenir Next", "Nunito", "Segoe UI", system-ui, -apple-system, sans-serif;
+    font-size: 18px;
+    line-height: 1.45;
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  button { touch-action: manipulation; font: inherit; color: inherit; }
+  .app { max-width: 820px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 48px; }
+  [hidden] { display: none !important; }
+  h1 { font-size: 30px; margin: 6px 0 2px; letter-spacing: -0.01em; }
+  h2 { font-size: 18px; margin: 24px 0 10px; color: var(--muted); font-weight: 700; }
+  .sub { color: var(--muted); margin: 0; }
+
+  /* ---------- Fach-Wahl ---------- */
+  .faecher { display: flex; gap: 10px; margin-top: 14px; }
+  .fach {
+    flex: 1; appearance: none; cursor: pointer; border: 2px solid var(--line); background: var(--card);
+    border-radius: 16px; padding: 10px 12px; font-weight: 800; font-size: 19px; display: flex; align-items: center; gap: 10px;
+    justify-content: center;
+  }
+  .fach .fl { font-size: 28px; line-height: 1; }
+  .fach[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+
+  /* ---------- Level-Karte ---------- */
+  .level {
+    margin-top: 14px; background: var(--card); border-radius: var(--radius); padding: 16px 18px;
+    box-shadow: 0 2px 0 var(--line);
+  }
+  .level-kopf { display: flex; align-items: center; gap: 14px; }
+  .level-icon { font-size: 44px; line-height: 1; }
+  .level-name { font-weight: 800; font-size: 21px; line-height: 1.2; }
+  .level-naechst { color: var(--muted); font-size: 15px; }
+  .level-sterne { margin-left: auto; text-align: right; font-weight: 800; font-size: 20px; white-space: nowrap; }
+  .level-sterne small { display: block; font-weight: 600; font-size: 13px; color: var(--muted); }
+  .vierbalken { display: flex; height: 16px; border-radius: 99px; overflow: hidden; background: var(--neu); margin-top: 14px; }
+  .vierbalken > div { height: 100%; transition: width .5s ease; }
+  .vierbalken .h, .mini .h { background: var(--himmel); }
+  .vierbalken .w, .mini .w { background: var(--wackel); }
+  .vierbalken .l, .mini .l { background: var(--hoelle); }
+  .legende { display: flex; gap: 6px 14px; flex-wrap: wrap; font-size: 14px; color: var(--muted); margin-top: 8px; }
+  .legende b { color: var(--ink); }
+  .punkt { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+  .tageszeile { display: flex; gap: 8px 16px; flex-wrap: wrap; font-size: 15px; margin-top: 10px; }
+  .tageszeile span { background: #fff7e0; border-radius: 99px; padding: 2px 10px; }
+  .medaillen { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .medaille { font-size: 13px; background: #fff7e0; border-radius: 99px; padding: 3px 10px; border: 1px solid #f5e2a8; }
+  .medaille.leer { background: transparent; border: 1px dashed var(--line); color: #a8a196; }
+
+  .weiterspielen {
+    margin-top: 14px; display: flex; align-items: center; gap: 14px; background: var(--accent-soft);
+    border-radius: var(--radius); padding: 14px 16px; flex-wrap: wrap;
+  }
+  .weiterspielen .txt { flex: 1; min-width: 180px; }
+  .weiterspielen b { display: block; font-size: 19px; }
+
+  /* ---------- Auswahl ---------- */
+  .gruppen { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .chip {
+    appearance: none; border: 2px solid var(--line); background: var(--card);
+    border-radius: 14px; padding: 10px 12px; text-align: left; cursor: pointer;
+    transition: border-color .15s, background .15s, transform .1s; position: relative;
+  }
+  .chip:active { transform: scale(.97); }
+  .chip .name { font-size: 18px; font-weight: 800; display: block; line-height: 1.25; padding-right: 22px; }
+  .chip .info { font-size: 13px; color: var(--muted); display: block; }
+  .mini { display: flex; height: 6px; border-radius: 99px; overflow: hidden; background: var(--neu); margin-top: 6px; }
+  .mini > div { height: 100%; }
+  .chip .krone { position: absolute; right: 9px; top: 7px; font-size: 18px; }
+  .chip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .chip.alle { grid-column: 1 / -1; text-align: center; }
+  .chip.alle .name { font-size: 18px; padding: 0; }
+  .chip.neu-unit { border-style: dashed; color: var(--muted); text-align: center; display: flex; align-items: center; justify-content: center; }
+  .chip.neu-unit .name { padding: 0; font-size: 16px; }
+  .reihe { display: flex; gap: 10px; flex-wrap: wrap; }
+  .reihe .chip { text-align: center; min-width: 64px; padding: 10px 14px; }
+  .reihe .chip .name { font-size: 18px; padding: 0; }
+  .reihe.breit .chip { flex: 1; min-width: 170px; text-align: left; }
+  .reihe.breit .chip .name { font-size: 17px; }
+
+  .schalter { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; font-size: 17px; }
+  .schalter input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .schalter .bahn { width: 50px; height: 30px; border-radius: 99px; background: var(--neu); position: relative; flex: none; transition: background .2s; }
+  .schalter .bahn::after { content: ""; position: absolute; left: 3px; top: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .2s; }
+  .schalter input:checked + .bahn { background: var(--good); }
+  .schalter input:checked + .bahn::after { transform: translateX(20px); }
+  .schalter input:focus-visible + .bahn { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .schalter small { display: block; color: var(--muted); font-size: 13px; }
+  .stimme-hinweis { font-size: 14px; color: var(--muted); }
+
+  .btn {
+    appearance: none; border: 0; border-radius: 14px; cursor: pointer; font-weight: 800;
+    padding: 14px 26px; font-size: 20px; background: var(--accent); color: #fff;
+    transition: transform .1s, opacity .15s;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn.zweit { background: var(--card); color: var(--ink); border: 2px solid var(--line); }
+  .btn.klein { font-size: 16px; padding: 9px 16px; }
+  .aktionen { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 22px; align-items: center; }
+  .aktionen.mitte { justify-content: center; }
+  .links { margin-top: 32px; display: flex; gap: 8px 18px; flex-wrap: wrap; }
+  .klein-link { background: none; border: 0; color: var(--muted); font-size: 14px; text-decoration: underline; cursor: pointer; padding: 4px 0; }
+  .warnung { background: var(--bad-soft); color: var(--bad); border-radius: 12px; padding: 10px 14px; margin: 12px 0; font-size: 15px; }
+
+  /* ---------- Spiel ---------- */
+  .kopf { display: flex; align-items: center; gap: 12px; }
+  .balken { flex: 1; height: 14px; background: var(--line); border-radius: 99px; overflow: hidden; }
+  .balken > div { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .35s ease; }
+  .zaehler { font-size: 15px; color: var(--muted); min-width: 60px; text-align: right; font-variant-numeric: tabular-nums; }
+  .beenden { background: none; border: 0; color: var(--muted); font-size: 22px; cursor: pointer; padding: 4px 8px; }
+  .spielstand { display: flex; justify-content: space-between; font-size: 15px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; gap: 4px 12px; }
+  .spielstand b { color: var(--ink); }
+
+  .karte {
+    position: relative; margin-top: 16px; background: var(--card); border-radius: var(--radius);
+    padding: 28px 18px 24px; text-align: center; box-shadow: 0 2px 0 var(--line), 0 10px 30px rgba(60, 50, 30, .05);
+    min-height: 440px; overflow: hidden;
+  }
+  .status-wort { font-size: 14px; font-weight: 700; min-height: 20px; margin-bottom: 2px; }
+  .status-wort.hoelle { color: var(--hoelle); }
+  .status-wort.wackel { color: #7a55c4; }
+  .status-wort.neu { color: var(--muted); }
+  .richtung { font-size: 15px; color: var(--muted); margin-bottom: 12px; }
+  .frage { font-size: var(--wort); font-weight: 700; line-height: 1.2; word-break: break-word; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+  .laut {
+    appearance: none; border: 2px solid var(--line); background: var(--card); border-radius: 50%;
+    width: 48px; height: 48px; font-size: 22px; cursor: pointer; flex: none; line-height: 1; padding: 0;
+  }
+  .laut:active { transform: scale(.93); }
+  .laut.spricht { border-color: var(--accent); background: var(--accent-soft); }
+
+  .schreiben { margin-top: 22px; }
+  .eingabe {
+    width: 100%; max-width: 520px; font: inherit; font-size: 28px; padding: 12px 14px; border-radius: 14px; text-align: center;
+    border: 3px solid var(--line); background: #fff; color: var(--ink); outline: none;
+  }
+  .eingabe:focus { border-color: var(--accent); }
+  .eingabe.richtig { border-color: var(--good); background: var(--good-soft); }
+  .eingabe.fast { border-color: var(--wackel); background: var(--wackel-soft); }
+  .eingabe.falsch { border-color: var(--bad); background: var(--bad-soft); text-decoration: line-through; }
+  .akzente { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 10px; }
+  .akzente button {
+    appearance: none; border: 2px solid var(--line); background: var(--card); border-radius: 10px;
+    min-width: 42px; height: 42px; font-size: 20px; cursor: pointer; padding: 0 6px;
+  }
+  .akzente button:active { background: var(--accent-soft); }
+  .schreiben .aktionen { margin-top: 16px; }
+
+  .loesung { margin-top: 20px; }
+  .loesung .titel { font-weight: 800; font-size: 24px; }
+  .loesung.gut .titel { color: var(--good); }
+  .loesung.fast .titel { color: #7a55c4; }
+  .loesung.schlecht .titel { color: var(--bad); }
+  .loesung .ziel { font-size: clamp(28px, 6vw, 42px); font-weight: 700; color: var(--good); display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+  .loesung .grund { font-size: 16px; color: #7a55c4; margin-top: 2px; }
+  .loesung .notiz { display: inline-block; font-size: 15px; color: #7a5d00; background: #fff7e0; border-radius: 10px; padding: 4px 12px; margin-top: 8px; }
+  .loesung .wohin { font-size: 14px; color: var(--muted); margin-top: 6px; }
+  .mikro-info { font-size: 15px; color: var(--muted); min-height: 22px; margin-top: 10px; }
+  .mikro-info.hoert { color: var(--accent); font-weight: 700; }
+
+  .bewertung { display: flex; gap: 10px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
+  .bew {
+    appearance: none; cursor: pointer; flex: 1; max-width: 200px; min-width: 120px; padding: 14px 10px; border-radius: 18px;
+    font-size: 19px; font-weight: 800; background: var(--card); border: 3px solid var(--line); box-shadow: 0 4px 0 var(--line);
+  }
+  .bew:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--line); }
+  .bew .icon { display: block; font-size: 30px; line-height: 1.1; }
+  .bew .taste { display: block; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .bew.gewusst { border-color: #bfe5d0; }
+  .bew.fast { border-color: #dccff6; }
+  .bew.nicht { border-color: #f4c9c5; }
+  @media (hover: none) and (pointer: coarse) { .bew .taste, .kbd { display: none; } }
+
+  .weiter-zeile { margin-top: 16px; display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
+  .kbd { font-size: 14px; color: var(--muted); }
+  .kbd kbd { font: inherit; border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 6px; padding: 1px 7px; background: #fff; }
+
+  .lob {
+    position: absolute; left: 50%; top: 10px; transform: translateX(-50%);
+    background: var(--gold); color: #3a2a00; font-weight: 800; border-radius: 99px; padding: 6px 18px;
+    font-size: 17px; white-space: nowrap; animation: lob 2.4s ease forwards; pointer-events: none; z-index: 2;
+  }
+  @keyframes lob {
+    0% { opacity: 0; transform: translate(-50%, 10px) scale(.8); }
+    15% { opacity: 1; transform: translate(-50%, 0) scale(1.06); }
+    25% { transform: translate(-50%, 0) scale(1); }
+    80% { opacity: 1; }
+    100% { opacity: 0; transform: translate(-50%, -8px); }
+  }
+  .stern { position: absolute; pointer-events: none; color: var(--gold); animation: stern 1s ease-out forwards; z-index: 1; }
+  @keyframes stern {
+    0% { opacity: 0; transform: translate(0, 0) scale(.4) rotate(0); }
+    20% { opacity: 1; }
+    100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(1.1) rotate(160deg); }
+  }
+
+  /* ---------- Online-Spielstand ---------- */
+  .online {
+    margin-top: 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    background: var(--card); border: 2px dashed var(--line); border-radius: var(--radius); padding: 12px 16px;
+  }
+  .online.an { border-style: solid; border-color: #cfe0fb; }
+  .online .txt { flex: 1; min-width: 200px; font-size: 15px; color: var(--muted); }
+  .online .txt b { color: var(--ink); }
+
+  /* ---------- Overlays ---------- */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(40, 46, 60, .45); display: flex; align-items: center; justify-content: center;
+    padding: 16px; z-index: 10; animation: einblenden .25s ease; overflow-y: auto;
+  }
+  .overlay .box {
+    background: var(--card); border-radius: 24px; padding: 28px 24px; text-align: center; max-width: 380px; width: 100%;
+    animation: hops .5s cubic-bezier(.2, 1.6, .4, 1); margin: auto;
+  }
+  .overlay .gross { font-size: 84px; line-height: 1; }
+  .overlay h3 { margin: 10px 0 4px; font-size: 26px; }
+  .overlay p { margin: 0 0 18px; color: var(--muted); }
+  @keyframes einblenden { from { opacity: 0; } }
+  @keyframes hops { from { transform: scale(.6); opacity: 0; } }
+
+  .formular { text-align: left; }
+  .formular h3, .formular > p { text-align: center; }
+  .formular label { display: block; font-weight: 700; font-size: 15px; margin: 12px 0 4px; }
+  .formular input, .formular textarea {
+    width: 100%; font: inherit; font-size: 20px; padding: 10px 12px; border-radius: 12px;
+    border: 2px solid var(--line); background: #fff; color: var(--ink); outline: none;
+  }
+  .formular textarea { font-size: 16px; min-height: 200px; resize: vertical; line-height: 1.4; }
+  .formular input:focus, .formular textarea:focus { border-color: var(--accent); }
+  .formular .fehler { color: var(--bad); font-size: 15px; min-height: 22px; margin-top: 10px; text-align: center; }
+  .formular .aktionen { margin-top: 10px; }
+  .formular .klein-link { display: block; margin: 14px auto 0; }
+  .box.breit { max-width: 640px; animation: none; }
+  .hilfe { font-size: 14px; color: var(--muted); margin: 4px 0 0; }
+  .vorschau { font-size: 15px; background: var(--bg); border-radius: 12px; padding: 10px 12px; margin-top: 10px; }
+  .vorschau ul { margin: 6px 0 0; padding-left: 20px; }
+  .vorschau .bad { color: var(--bad); }
+  .reihe.klein .chip { min-width: 0; padding: 6px 12px; }
+  .reihe.klein .chip .name { font-size: 15px; }
+
+  /* ---------- Ende ---------- */
+  .ergebnis { text-align: center; margin-top: 10px; }
+  .ergebnis .punkte { font-size: 62px; font-weight: 800; line-height: 1.1; margin: 8px 0 2px; }
+  .ergebnis .punkte small { font-size: 24px; color: var(--muted); font-weight: 600; }
+  .ergebnis .satz { font-size: 20px; margin: 6px 0; }
+  .wortliste { list-style: none; padding: 0; margin: 8px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; }
+  .wortliste li { background: var(--card); border-radius: 12px; padding: 8px 14px; font-size: 18px; border-left: 5px solid var(--hoelle); }
+  .wortliste li.wackel { border-left-color: var(--wackel); }
+  .wortliste li small { display: block; color: var(--muted); font-size: 14px; }
+  .wortliste li b { color: var(--good); }
+
+  /* ---------- Wörterliste ---------- */
+  .liste-kopf { display: flex; align-items: center; gap: 10px; }
+  .liste-kopf h1 { font-size: 26px; }
+  .unit-block { margin-top: 18px; }
+  .unit-block .unit-titel { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .unit-block .unit-titel b { font-size: 19px; }
+  .tabelle { background: var(--card); border-radius: 14px; overflow: hidden; box-shadow: 0 2px 0 var(--line); }
+  .zeile { display: grid; grid-template-columns: 1fr 1fr auto; gap: 4px 10px; align-items: center; padding: 8px 12px; border-top: 1px solid var(--line); font-size: 16px; }
+  .zeile:first-child { border-top: 0; }
+  .zeile .fremd { display: flex; align-items: center; gap: 6px; }
+  .zeile .laut { width: 34px; height: 34px; font-size: 16px; border-width: 1px; }
+  .zeile .stand { font-size: 14px; white-space: nowrap; text-align: right; color: var(--muted); }
+  .zeile .stand .x { color: var(--bad); font-weight: 700; }
+  .leer-hinweis { color: var(--muted); padding: 12px; }
+
+  @media (max-width: 480px) {
+    .level-icon { font-size: 36px; }
+    .fach { font-size: 17px; padding: 10px 8px; }
+    .zeile { grid-template-columns: 1fr 1fr; }
+    .zeile .stand { grid-column: 1 / -1; text-align: left; }
+    .bew { min-width: 0; font-size: 16px; padding: 12px 6px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .stern, .lob, .overlay, .overlay .box { animation-duration: .01s; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ======================= START ======================= -->
+  <section id="start">
+    <h1 id="gruss">Hallo! 👋</h1>
+    <p class="sub">Bring die Wörter in den Himmel ☁️. Falsche landen in der Hölle 🔥, wackelige bleiben Wackelkandidaten 🌀, bis sie sicher sitzen.</p>
+    <div id="datenWarnung" class="warnung" hidden></div>
+
+    <div class="faecher" id="fachWahl"></div>
+
+    <div class="level">
+      <div class="level-kopf">
+        <div class="level-icon" id="levelIcon"></div>
+        <div>
+          <div class="level-name" id="levelName"></div>
+          <div class="level-naechst" id="levelNaechst"></div>
+        </div>
+        <div class="level-sterne"><span id="sterneTotal">0</span> ⭐<small>Sterne</small></div>
+      </div>
+      <div class="vierbalken" id="gesamtBalken"><div class="h"></div><div class="w"></div><div class="l"></div></div>
+      <div class="legende" id="gesamtLegende"></div>
+      <div class="tageszeile" id="tageszeile"></div>
+      <div class="medaillen" id="medaillen"></div>
+    </div>
+
+    <div class="online" id="onlineBox" hidden>
+      <div class="txt" id="onlineText"></div>
+      <button type="button" class="btn zweit klein" id="onlineBtn">Anmelden</button>
+      <button type="button" class="klein-link" id="abmeldenBtn" hidden>Abmelden</button>
+    </div>
+
+    <div class="weiterspielen" id="weiterBox" hidden>
+      <div class="txt"><b>Runde weiterspielen</b><span id="weiterInfo"></span></div>
+      <button type="button" class="btn" id="weiterspielenBtn">Weiter ▶</button>
+    </div>
+
+    <h2>1. Welche Units?</h2>
+    <div class="gruppen" id="unitWahl"></div>
+
+    <h2>2. In welche Richtung?</h2>
+    <div class="reihe breit" id="richtungWahl"></div>
+
+    <h2>3. Wie abfragen?</h2>
+    <div class="reihe breit" id="abfrageWahl">
+      <button type="button" class="chip" data-abfrage="schreiben"><span class="name">✍️ Schreiben</span><span class="info">Antwort eintippen, die App prüft</span></button>
+      <button type="button" class="chip" data-abfrage="muendlich"><span class="name">🗣️ Mündlich</span><span class="info" id="infoMuendlich">laut sagen, Lösung zeigen, selbst bewerten</span></button>
+    </div>
+
+    <h2>4. Welche Wörter?</h2>
+    <div class="reihe breit" id="modusWahl">
+      <button type="button" class="chip" data-modus="offen"><span class="name">✨ Noch nicht im Himmel</span><span class="info" id="infoOffen"></span></button>
+      <button type="button" class="chip" data-modus="fehler"><span class="name">🔥🌀 Hölle + Wackel</span><span class="info" id="infoFehler"></span></button>
+      <button type="button" class="chip" data-modus="schwierig"><span class="name">🧠 Schwierige</span><span class="info" id="infoSchwierig"></span></button>
+      <button type="button" class="chip" data-modus="alle"><span class="name">🔁 Alles wiederholen</span><span class="info" id="infoAlle"></span></button>
+    </div>
+
+    <h2>5. Wie viele?</h2>
+    <div class="reihe" id="laengenWahl"></div>
+
+    <h2>Aussprache</h2>
+    <div id="stimmeBox">
+      <label class="schalter"><input type="checkbox" id="vorlesenSchalter"><span class="bahn"></span>
+        <span>🔊 Automatisch vorsprechen<small>Das fremde Wort wird vorgelesen, sobald es zu sehen ist.</small></span></label>
+      <label class="schalter"><input type="checkbox" id="langsamSchalter"><span class="bahn"></span>
+        <span>🐢 Langsam sprechen</span></label>
+    </div>
+    <p class="stimme-hinweis" id="stimmeHinweis" hidden>Dieser Browser kann nicht vorlesen.</p>
+    <p class="stimme-hinweis" id="stimmeName"></p>
+
+    <div class="aktionen">
+      <button type="button" class="btn" id="losBtn" disabled>Los geht's!</button>
+      <span class="sub" id="auswahlInfo"></span>
+    </div>
+
+    <div class="links">
+      <button type="button" class="klein-link" id="listeBtn">📋 Wörter ansehen</button>
+      <button type="button" class="klein-link" id="resetAuswahlBtn">Ausgewählte Units zurücksetzen</button>
+      <button type="button" class="klein-link" id="resetAlleBtn">Alles zurücksetzen</button>
+    </div>
+  </section>
+
+  <!-- ======================= SPIEL ======================= -->
+  <section id="spiel" hidden>
+    <div class="kopf">
+      <button type="button" class="beenden" id="pauseBtn" aria-label="Pause">✕</button>
+      <div class="balken"><div id="balken"></div></div>
+      <div class="zaehler" id="zaehler"></div>
+    </div>
+    <div class="spielstand">
+      <span>✅ <b id="standRichtig">0</b> &nbsp; 🌀 <b id="standFast">0</b> &nbsp; 🔥 <b id="standFalsch">0</b></span>
+      <span>Serie: <b id="standSerie">0</b> · ⭐ <b id="standSterne">0</b></span>
+    </div>
+
+    <div class="karte" id="karte">
+      <div class="status-wort" id="statusWort"></div>
+      <div class="richtung" id="richtungText"></div>
+      <div class="frage"><span id="frageText"></span><button type="button" class="laut" id="frageLaut" aria-label="Vorsprechen">🔊</button></div>
+
+      <form class="schreiben" id="schreibForm" autocomplete="off" hidden>
+        <input class="eingabe" id="eingabe" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="go" aria-label="Deine Antwort">
+        <div class="akzente" id="akzente"></div>
+        <div class="aktionen mitte" id="schreibAktionen">
+          <button type="submit" class="btn" id="pruefenBtn">Prüfen</button>
+          <button type="button" class="btn zweit" id="weissNichtBtn">Weiss nicht</button>
+        </div>
+      </form>
+
+      <div id="muendlichBox" hidden>
+        <div class="aktionen mitte">
+          <button type="button" class="btn" id="loesenBtn">Lösung zeigen</button>
+          <button type="button" class="btn zweit" id="mikroBtn" hidden>🎤 Sagen</button>
+        </div>
+        <div class="kbd" style="margin-top:8px">oder <kbd>Leertaste</kbd></div>
+        <div class="mikro-info" id="mikroInfo" aria-live="polite"></div>
+      </div>
+
+      <div class="loesung" id="loesung" aria-live="polite" hidden></div>
+
+      <div class="bewertung" id="bewertung" hidden>
+        <button type="button" class="bew gewusst" data-bew="r"><span class="icon">✅</span>Gewusst<span class="taste">Taste 1</span></button>
+        <button type="button" class="bew fast" data-bew="a"><span class="icon">🤏</span>Fast<span class="taste">Taste 2</span></button>
+        <button type="button" class="bew nicht" data-bew="f"><span class="icon">❌</span>Nicht gewusst<span class="taste">Taste 3</span></button>
+      </div>
+
+      <div class="weiter-zeile" id="weiterZeile" hidden>
+        <button type="button" class="btn" id="weiterBtn">Weiter</button>
+        <button type="button" class="btn zweit klein" id="dochRichtigBtn" hidden>Das war richtig</button>
+        <span class="kbd">oder <kbd>Enter</kbd></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================= ENDE ======================= -->
+  <section id="ende" hidden>
+    <div class="ergebnis">
+      <h1 id="endeTitel">Fertig!</h1>
+      <div class="punkte" id="endePunkte"></div>
+      <div class="satz" id="endeSatz"></div>
+    </div>
+    <div class="level" id="endeLevel"></div>
+    <div id="endeFehlerBlock">
+      <h2>Diese Wörter üben wir nochmals:</h2>
+      <ul class="wortliste" id="endeFehler"></ul>
+    </div>
+    <div class="aktionen mitte">
+      <button type="button" class="btn" id="fehlerBtn">🔥 Diese nochmals</button>
+      <button type="button" class="btn zweit" id="nochmalsBtn">Neue Runde</button>
+      <button type="button" class="btn zweit" id="startBtn">Zum Start</button>
+    </div>
+  </section>
+
+  <!-- ======================= WÖRTERLISTE ======================= -->
+  <section id="liste" hidden>
+    <div class="liste-kopf">
+      <button type="button" class="beenden" id="listeZurueck" aria-label="Zurück">←</button>
+      <h1 id="listeTitel">Wörter</h1>
+    </div>
+    <p class="sub">Pfeile: <b>→</b> Deutsch nach <span id="listeSprache"></span>, <b>←</b> umgekehrt. ☁️ Himmel · 🌀 Wackel · 🔥 Hölle · ✨ neu · <span style="color:var(--bad)">✗</span> = so oft falsch</p>
+    <div class="reihe klein" id="listeFilter" style="margin-top:12px">
+      <button type="button" class="chip" data-filter="alle"><span class="name">Alle</span></button>
+      <button type="button" class="chip" data-filter="hoelle"><span class="name">🔥 Hölle</span></button>
+      <button type="button" class="chip" data-filter="wackel"><span class="name">🌀 Wackel</span></button>
+      <button type="button" class="chip" data-filter="schwierig"><span class="name">🧠 Schwierige</span></button>
+    </div>
+    <div id="listeInhalt"></div>
+  </section>
+
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="box">
+    <div class="gross" id="ovIcon"></div>
+    <h3 id="ovTitel"></h3>
+    <p id="ovText"></p>
+    <button type="button" class="btn" id="ovBtn">Juhu!</button>
+  </div>
+</div>
+
+<div class="overlay" id="loginOverlay" hidden>
+  <form class="box formular" id="loginForm" autocomplete="off">
+    <div class="gross">☁️</div>
+    <h3>Spielstand online</h3>
+    <p>Mit Spielname und PIN ist dein Stand auf jedem Gerät da. Es ist derselbe Spielname wie beim Wörter-Himmel.</p>
+    <label for="loginName">Spielname</label>
+    <input id="loginName" maxlength="20" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="next">
+    <label for="loginPin">PIN (4 Ziffern)</label>
+    <input id="loginPin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="off" enterkeyhint="go">
+    <div class="fehler" id="loginFehler" aria-live="polite"></div>
+    <div class="aktionen mitte">
+      <button type="submit" class="btn" id="loginBtn">Anmelden</button>
+      <button type="button" class="btn zweit" id="neuBtn">Neu anlegen</button>
+    </div>
+    <button type="button" class="klein-link" id="loginAbbrechen">Abbrechen</button>
+  </form>
+</div>
+
+<div class="overlay" id="unitOverlay" hidden>
+  <form class="box formular breit" id="unitForm" autocomplete="off">
+    <h3 id="unitTitel">Eigene Unit</h3>
+    <label for="unitName">Name der Unit</label>
+    <input id="unitName" maxlength="40" placeholder="z. B. Unité 3 – Au marché">
+    <label for="unitText">Wörter, eines pro Zeile</label>
+    <textarea id="unitText" spellcheck="false" autocapitalize="off" autocorrect="off"></textarea>
+    <p class="hilfe" id="unitHilfe"></p>
+    <label>Links steht</label>
+    <div class="reihe klein" id="unitLinks">
+      <button type="button" class="chip" data-links="de"><span class="name">Deutsch</span></button>
+      <button type="button" class="chip" data-links="fremd"><span class="name" id="unitLinksFremd">Französisch</span></button>
+    </div>
+    <div class="vorschau" id="unitVorschau"></div>
+    <div class="fehler" id="unitFehler" aria-live="polite"></div>
+    <div class="aktionen mitte">
+      <button type="submit" class="btn" id="unitSpeichern">Speichern</button>
+      <button type="button" class="btn zweit" id="unitAbbrechen">Abbrechen</button>
+    </div>
+    <button type="button" class="klein-link" id="unitLoeschen" hidden>Diese Unit löschen</button>
+  </form>
+</div>
+
+<script>
+"use strict";
+
+/* =====================================================================
+   1. DATEN
+   Eine Zeile je Wort: «deutsch = fremd». Mehrere Lösungen mit «;» trennen,
+   (Klammern) = freiwillig, « # Notiz» erscheint nach der Antwort.
+   Die id einer Unit nie ändern – an ihr hängt der Lernstand.
+   ===================================================================== */
+const FAECHER = {
+  fr: {
+    id: "fr", name: "Französisch", flagge: "🇫🇷", sprache: "fr", stimme: "fr-FR",
+    akzente: ["é", "è", "ê", "à", "â", "ç", "î", "ï", "ô", "û", "ù", "ë", "œ"],
+    levels: [
+      { ab: 0,    icon: "🧳", name: "Koffer gepackt" },
+      { ab: 15,   icon: "🚆", name: "Im TGV nach Paris" },
+      { ab: 40,   icon: "🥐", name: "Boulangerie" },
+      { ab: 80,   icon: "🧀", name: "Fromagerie" },
+      { ab: 140,  icon: "🎠", name: "Jardin du Luxembourg" },
+      { ab: 220,  icon: "🚲", name: "Tour de France" },
+      { ab: 320,  icon: "🏰", name: "Château de Versailles" },
+      { ab: 450,  icon: "🎨", name: "Musée du Louvre" },
+      { ab: 600,  icon: "🗼", name: "Tour Eiffel" },
+      { ab: 800,  icon: "🏔️", name: "Mont Blanc" },
+      { ab: 1000, icon: "🏆", name: "Grand Prix de France!" },
+    ],
+  },
+  en: {
+    id: "en", name: "Englisch", flagge: "🇬🇧", sprache: "en", stimme: "en-GB",
+    akzente: [],
+    levels: [
+      { ab: 0,    icon: "🧳", name: "Koffer gepackt" },
+      { ab: 15,   icon: "✈️", name: "Flug nach London" },
+      { ab: 40,   icon: "🚌", name: "Doppeldecker-Bus" },
+      { ab: 80,   icon: "💂", name: "Buckingham Palace" },
+      { ab: 140,  icon: "🎡", name: "London Eye" },
+      { ab: 220,  icon: "⚽", name: "Wembley" },
+      { ab: 320,  icon: "🏰", name: "Edinburgh Castle" },
+      { ab: 450,  icon: "🗽", name: "New York" },
+      { ab: 600,  icon: "🌉", name: "Golden Gate Bridge" },
+      { ab: 800,  icon: "🦘", name: "Sydney" },
+      { ab: 1000, icon: "🌍", name: "Einmal um die Welt!" },
+    ],
+  },
+};
+
+const UNITS = [
+  { fach: "fr", id: "fr-couleurs", name: "Les couleurs", woerter: `
+rot = rouge
+blau = bleu
+grün = vert
+gelb = jaune
+schwarz = noir
+weiss = blanc
+grau = gris
+braun = marron; brun
+rosa = rose
+orange = orange
+violett = violet
+` },
+  { fach: "fr", id: "fr-famille", name: "La famille", woerter: `
+die Familie = la famille
+die Mutter = la mère
+der Vater = le père
+die Eltern = les parents
+der Bruder = le frère
+die Schwester = la sœur
+der Sohn = le fils
+die Tochter = la fille
+die Grossmutter = la grand-mère
+der Grossvater = le grand-père
+der Onkel = l'oncle # l'oncle ist männlich
+die Tante = la tante
+der Cousin = le cousin
+die Cousine = la cousine
+` },
+  { fach: "fr", id: "fr-ecole", name: "À l'école", woerter: `
+die Schule = l'école # l'école ist weiblich
+das Buch = le livre
+das Heft = le cahier
+der Bleistift = le crayon
+der Kugelschreiber = le stylo
+der Radiergummi = la gomme
+das Lineal = la règle
+die Schere = les ciseaux # immer in der Mehrzahl
+die Schultasche = le sac d'école; le cartable
+der Tisch = la table
+der Stuhl = la chaise
+die Wandtafel = le tableau
+lesen = lire
+schreiben = écrire
+` },
+  { fach: "fr", id: "fr-animaux", name: "Les animaux", woerter: `
+der Hund = le chien
+die Katze = le chat
+das Pferd = le cheval # Mehrzahl: les chevaux
+die Kuh = la vache
+das Schwein = le cochon
+das Schaf = le mouton
+der Vogel = l'oiseau # l'oiseau ist männlich
+der Fisch = le poisson
+die Maus = la souris
+das Kaninchen = le lapin
+die Ente = le canard
+der Bär = l'ours # l'ours ist männlich
+` },
+  { fach: "fr", id: "fr-verbes", name: "Les verbes", woerter: `
+sein = être
+haben = avoir
+gehen = aller
+machen = faire
+spielen = jouer
+essen = manger
+trinken = boire
+sprechen = parler
+wohnen = habiter
+mögen; gern haben = aimer
+sich waschen = se laver
+ich heisse = je m'appelle
+` },
+  { fach: "en", id: "en-nw2-u1", name: "Unit 1 – My Town", woerter: `
+// New World 2, Unit 1, S. 16 – Berufe
+der Bäcker; die Bäckerin = baker
+der Metzger; die Metzgerin = butcher
+der Verkäufer; die Verkäuferin = shop assistant
+der Kellner; die Kellnerin = waiter; waitress
+der Arzt; die Ärztin = doctor
+der Briefträger; die Briefträgerin = postman; postwoman
+der Polizist; die Polizistin = police officer
+der Reporter; die Reporterin = reporter
+der Büroangestellte; die Büroangestellte = office worker
+der Taxifahrer; die Taxifahrerin = taxi driver
+// Orte in der Stadt
+die Bäckerei = bakery
+die Metzgerei = butcher's shop
+der Supermarkt = supermarket
+das Büro = office
+das Krankenhaus = hospital
+der Bahnhof = train station
+das Gebäude = building
+die Post = post office
+die Polizeiwache = police station
+// Uhrzeit und Datum
+Es ist fünf Uhr. = It's five o'clock.
+Es ist Viertel nach sieben. = It's a quarter past seven.
+Es ist halb sieben. = It's half past six.
+Es ist Viertel vor acht. = It's a quarter to eight.
+am 1. Mai; am ersten Mai = on the 1st of May; on the first of May
+// Den Weg beschreiben
+Biege links ab. = Turn left.
+Biege rechts ab. = Turn right.
+Gehe geradeaus. = Walk straight on.
+Überquere die Strasse. = Cross the street.
+Gehe an … vorbei. = Walk past … # z. B. Walk past the school.
+neben = next to
+vor = in front of # Ort: vor der Kirche
+an der Ecke = at the corner
+gegenüber = across from
+` },
+  { fach: "en", id: "en-nw2-u2", name: "Unit 2 – Trends and fashion", woerter: `
+// New World 2, Unit 2, S. 32 – Kleider
+die Kleidung = clothes
+das Hemd = shirt
+das T-Shirt = T-shirt
+die Bluse = blouse
+das Oberteil; das Top = top
+der Pullover = jumper
+die Jacke = jacket
+die Hose = trousers
+der Rock = skirt
+das Kleid = dress
+die Schuhe = shoes
+die Turnschuhe = trainers
+die Krawatte = tie
+die Jeans = jeans
+der Jeansstoff = denim
+// Accessoires
+das Accessoire = accessory
+der Schmuck = jewellery
+die Sonnenbrille = sunglasses
+die Tasche = bag
+der Hut; die Mütze = hat
+der Schal = scarf
+// Muster
+das Muster = pattern
+kariert = checked
+gestreift = striped
+gepunktet = spotted
+eng = tight
+modisch = stylish
+// Mode und Umwelt
+der Konsum = consumption
+die Umwelt = environment
+aus zweiter Hand = second-hand; second hand
+der Secondhandladen = charity shop
+nachhaltig = sustainable
+die Uniform = uniform
+der Trendsetter; die Trendsetterin = trendsetter
+// Mengen
+einige = some
+etwas = something
+` },
+  { fach: "en", id: "en-nw2-u3", name: "Unit 3 – The Canadian Rocky Mountains", woerter: `
+// New World 2, Unit 3, S. 48 – Landschaft und Ferienort
+der Berg = mountain
+der Wald = forest
+der Gletscher = glacier
+der See = lake
+der Gipfel = peak
+der Fluss = river
+die Skipiste = ski slope
+der Fussweg = footpath
+der Wanderweg = hiking trail
+Fahrrad- und Bootsverleih = bike and boat rental
+die Seilbahn = cable car
+das Museum = museum
+das Hotel = hotel
+der Campingplatz = campsite
+// Tiere und Aktivitäten
+die Wildtiere; die Tierwelt = wildlife
+draussen; im Freien = outdoor; outdoors
+der Bär = bear
+der Elch = moose
+der Adler = eagle
+fischen = (to) fish
+der Fisch = fish
+der Wolf = wolf
+die Wölfe = wolves # Mehrzahl von wolf
+das Kanu = canoe
+Kanu fahren = (to) canoe
+Gleitschirm fliegen = (to) paraglide
+Schlittschuh laufen = (to) ice-skate
+// Zeit und Klima
+am Abend = in the evening
+in der Nacht = at night
+heute = today
+morgen = tomorrow
+der Klimawandel = climate change
+das Süsswasser = freshwater
+eine Lösung finden = (to) find a solution
+schützen = (to) protect
+der Schutz = protection
+schmelzen = (to) melt
+` },
+  { fach: "en", id: "en-nw2-u4", name: "Unit 4 – The chocolate journey", woerter: `
+// New World 2, Unit 4, S. 64 – Vom Kakao zur Schokolade
+die Schokolade = chocolate
+die Schokoladentafel = chocolate bar
+der Kakaobaum = cocoa tree
+die Kakaobohnen = cocoa beans
+die Kakaofrucht = cocoa fruit
+wachsen = (to) grow
+die Blüte; die Blume = flower
+reif = ripe
+trocknen = (to) dry
+bedecken = (to) cover
+schneiden = (to) cut
+das Messer = knife
+// Arbeit und Transport
+der Arbeiter; die Arbeiterin = worker
+der Bauer; die Bäuerin = farmer
+testen; prüfen = (to) test
+der Lastwagen = truck
+das Schiff = ship
+die Welt = world
+die Fabrik = factory
+erschaffen; erfinden = (to) create
+// Reihenfolge
+zuerst = first
+jetzt = now
+dann = then
+als Nächstes = next
+danach = after that
+schliesslich = finally
+// Fragen und Fairtrade
+Wann …? = When …?
+Wo …? = Where …?
+Welche …?; Welcher …?; Welches …? = Which …?
+Wieso …? = Why …?
+Wie viel …?; Wieviel …? = How much …?
+Wie viele …? = How many …?
+fairer Handel; gerechter Handel = fair trade
+die Kinderarbeit = child labour
+die Chemikalien = chemicals
+` },
+  { fach: "en", id: "en-nw2-u5", name: "Unit 5 – Story time", woerter: `
+// New World 2, Unit 5, S. 80 – Piraten und Geister
+ein Dorf am Meer = a village by the seaside
+die Geschichte = story
+der Fischer = fisherman
+der Pirat; die Piratin = pirate
+der Geist = ghost
+spuken; heimsuchen = (to) haunt
+erzählen = (to) tell
+zuhören = (to) listen
+das Meer = sea
+// Der Schatz
+der Schatz = treasure
+die Schatztruhe = treasure chest
+die Schatzkarte = treasure map
+stehlen = (to) steal
+verstecken = (to) hide
+verlieren = (to) lose
+lügen = (to) lie
+vertrauen = (to) trust
+// Im Keller
+das Lokal; die Kneipe = pub
+der Keller = cellar
+die Flasche = bottle
+das alte Blatt Papier = (an) old piece of paper
+das Fass = barrel
+schleichen = (to) sneak
+fallen = (to) fall
+// Die Geheimschrift
+das Tagebuch = diary
+die Nachricht = message
+der Geheimcode = secret code
+entschlüsseln = (to) decode
+finden = (to) find
+schauen = (to) look
+suchen = (to) look for
+Angst haben = (to) be scared
+das Schloss = lock # an einer Tür oder Truhe
+der Schlüssel = key
+das Piraten-Ehrenwort; das Piratenehrenwort = word of pirate honour
+` },
+];
+
+/* Erwartete Anzahl Wörter je Unit – beim Ergänzen nachführen. */
+const KONTROLLE = {
+  "fr-couleurs": 11, "fr-famille": 14, "fr-ecole": 14, "fr-animaux": 12, "fr-verbes": 12,
+  "en-nw2-u1": 33, "en-nw2-u2": 36, "en-nw2-u3": 37, "en-nw2-u4": 35, "en-nw2-u5": 35,
+};
+
+const RUNDEN_LAENGEN = ["10", "20", "30", "50", "alle"];
+
+const LOB = ["Super!", "Richtig!", "Toll!", "Genau!", "Prima!", "Bravo!", "Klasse!", "Spitze!", "Très bien!", "Well done!"];
+const SERIEN_LOB = ["5 in Folge – wow!", "Glückssträhne!", "Stark – weiter so!", "Nicht zu stoppen!", "Wörter-Rakete! 🚀"];
+
+/* =====================================================================
+   2. PARSER und PRÜFUNG
+   ===================================================================== */
+const TRENNER = /\s*(?:=|\t+|\s[–—-]\s)\s*/;
+
+/** Eine Zeile → { de:[…], fremd:[…], notiz } oder null (leer) oder { fehler } */
+function parseZeile(zeile, linksFremd) {
+  let z = String(zeile).replace(/ /g, " ").trim();
+  if (!z || z.startsWith("//")) return null;
+  z = z.replace(/^\d+\s*[.)]\s+/, "").replace(/^[•·*-]\s+/, "");
+  let notiz = "";
+  const n = z.indexOf(" # ");
+  if (n >= 0) { notiz = z.slice(n + 3).trim(); z = z.slice(0, n).trim(); }
+  const m = z.match(TRENNER);
+  if (!m) return { fehler: "kein Trennzeichen (= oder –)" };
+  let links = z.slice(0, m.index), rechts = z.slice(m.index + m[0].length);
+  if (linksFremd) [links, rechts] = [rechts, links];
+  const teile = s => s.split(";").map(x => x.trim()).filter(Boolean);
+  const de = teile(links), fremd = teile(rechts);
+  if (!de.length || !fremd.length) return { fehler: "eine Seite ist leer" };
+  return { de, fremd, notiz };
+}
+
+/** Text einer Unit → { eintraege, fehler } */
+function parseUnit(unit, linksFremd) {
+  const eintraege = [], fehler = [], gesehen = new Set();
+  String(unit.woerter || "").split(/\r?\n/).forEach((zeile, i) => {
+    const p = parseZeile(zeile, linksFremd);
+    if (!p) return;
+    if (p.fehler) { fehler.push(`${unit.name}, Zeile ${i + 1}: «${zeile.trim()}» – ${p.fehler}`); return; }
+    const key = `${unit.fach}|${unit.id}|${p.fremd[0]}`;
+    if (gesehen.has(key)) { fehler.push(`${unit.name}: «${p.fremd[0]}» kommt doppelt vor`); return; }
+    gesehen.add(key);
+    eintraege.push({ key, fach: unit.fach, unit: unit.id, de: p.de, fremd: p.fremd, notiz: p.notiz });
+  });
+  return { eintraege, fehler };
+}
+
+/* Vergleich: Gross/Klein, Satzzeichen und Leerzeichen egal, ß = ss, ’ = '. */
+function norm(s) {
+  return String(s).normalize("NFC").toLowerCase()
+    .replace(/[’`´‘]/g, "'").replace(/ß/g, "ss")
+    .replace(/[.!?¡¿,;:"«»()…]/g, " ")
+    .replace(/\s*-\s*/g, "")   // Bindestrich egal: T-Shirt = TShirt
+    .replace(/\s*'\s*/g, "'")
+    .replace(/\s+/g, " ").trim();
+}
+function ohneAkzent(s) {
+  return s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/œ/g, "oe").replace(/æ/g, "ae");
+}
+const ARTIKEL = {
+  de: /^(?:der|die|das|den|dem|des|ein|eine|einen)\s+/,
+  en: /^(?:the|a|an|to)\s+/,
+  fr: /^(?:(?:le|la|les|un|une|des|du|de la)\s+|l'|de l')/,
+};
+function ohneArtikel(s, sprache) { return s.replace(ARTIKEL[sprache] || /^$/, ""); }
+/* Englisch: Lang- und Kurzform gelten gleich («it is» = «it's», «do not» = «don't»). */
+function kurzformEn(s) {
+  return s.replace(/\b(it|he|she|that|what|there|where|who) is\b/g, "$1's").replace(/\bi am\b/g, "i'm")
+    .replace(/\b(you|we|they) are\b/g, "$1're").replace(/\b(do|does|did|is|are|was|were|has|have) not\b/g, "$1n't")
+    .replace(/\bcan ?not\b/g, "can't").replace(/\bwill not\b/g, "won't");
+}
+
+/* «(to) read» → ["to read", "read"]; mehrere Klammern werden kombiniert. */
+function varianten(s) {
+  const m = s.match(/\(([^()]*)\)/);
+  if (!m) return [s];
+  const mit = s.slice(0, m.index) + m[1] + s.slice(m.index + m[0].length);
+  const ohne = s.slice(0, m.index) + s.slice(m.index + m[0].length);
+  return [...varianten(mit), ...varianten(ohne)];
+}
+
+function levenshtein(a, b) {
+  if (Math.abs(a.length - b.length) > 2) return 99;
+  let vor = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const neu = [i];
+    for (let j = 1; j <= b.length; j++) {
+      neu[j] = Math.min(vor[j] + 1, neu[j - 1] + 1, vor[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    }
+    vor = neu;
+  }
+  return vor[b.length];
+}
+
+/**
+ * Geschriebene Antwort prüfen.
+ * Rückgabe { ergebnis: "r" (richtig) | "a" (fast) | "f" (falsch), grund }
+ * Deutsch und Englisch: Artikel freiwillig. Französisch: Artikel gehört dazu (sonst «fast»).
+ */
+function pruefe(eingabe, ziele, sprache) {
+  let e = norm(eingabe);
+  // Französisch: vergessener Apostroph («l oncle» = «l'oncle»)
+  if (sprache === "fr") e = e.replace(/(^|\s)(l|j|d|m|n|s|t|qu)\s+(?=[aeiouyhéèêàâîïôûœ])/g, "$1$2'");
+  if (!e) return { ergebnis: "f", grund: "" };
+  let V = ziele.flatMap(varianten).map(norm).filter(Boolean);
+  if (sprache === "en") { e = kurzformEn(e); V = V.map(kurzformEn); }
+  if (V.includes(e)) return { ergebnis: "r", grund: "" };
+  const oA = s => ohneArtikel(s, sprache);
+  if (sprache !== "fr" && V.some(v => oA(v) === oA(e))) return { ergebnis: "r", grund: "" };
+  if (V.some(v => ohneAkzent(v) === ohneAkzent(e))) return { ergebnis: "a", grund: "Achte auf die Akzente." };
+  if (V.some(v => ohneAkzent(oA(v)) === ohneAkzent(oA(e)))) {
+    const artikelFehlt = V.some(v => oA(v) !== v);
+    return { ergebnis: "a", grund: sprache === "fr" && artikelFehlt ? "Achte auf den Artikel." : "Achte auf die Akzente." };
+  }
+  if (V.some(v => { const a = ohneAkzent(oA(v)), b = ohneAkzent(oA(e)); return a.length >= 5 && levenshtein(a, b) <= 1; })) {
+    return { ergebnis: "a", grund: "Fast – ein Buchstabe stimmt nicht." };
+  }
+  return { ergebnis: "f", grund: "" };
+}
+
+/* Gesprochene Antwort (Mikrofon): Akzente und Artikel egal, ein Buchstabe Abweichung erlaubt. */
+/* Spracherkennung schreibt Zahlen oft als Ziffern («5:00», «1st») – für den Vergleich in Wörter umsetzen. */
+const ZAHLWOERTER = {
+  en: ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"],
+  de: ["null", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun", "zehn", "elf", "zwölf"],
+  fr: ["zéro", "un", "deux", "trois", "quatre", "cinq", "six", "sept", "huit", "neuf", "dix", "onze", "douze"],
+};
+function zahlenAlsWort(s, sprache) {
+  const w = ZAHLWOERTER[sprache];
+  if (!w) return s;
+  if (sprache === "en") s = s.replace(/\b(\d{1,2}) ?: ?00\b/g, "$1 o'clock").replace(/\b1st\b/g, "first").replace(/\b2nd\b/g, "second").replace(/\b3rd\b/g, "third");
+  return s.replace(/\b(\d{1,2})\b/g, (m, n) => w[+n] || m);
+}
+function passtGesprochen(gehoert, ziele, sprache) {
+  const vorbereiten = x => {
+    let t = norm(zahlenAlsWort(String(x).toLowerCase(), sprache));
+    if (sprache === "en") t = kurzformEn(t);
+    return ohneAkzent(ohneArtikel(t, sprache));
+  };
+  const e = vorbereiten(gehoert);
+  return ziele.flatMap(varianten).map(vorbereiten)
+    .some(v => v === e || (v.length >= 4 && levenshtein(v, e) <= 1));
+}
+
+/* =====================================================================
+   3. SPEICHER (localStorage, immer in try/catch)
+   woerter["fach|unit|wort#h"] = { r, f, a, n, l, t }
+     h = Deutsch → Fremdsprache, z = Fremdsprache → Deutsch
+     r/f/a = so oft richtig/falsch/fast, n = richtig in Folge, l = letzte Antwort (r|f|a), t = Zeitpunkt
+   Für den Abgleich zwischen Geräten:
+     reset         Zeitpunkt «Alles zurücksetzen»
+     unitReset     {unit: Zeitpunkt}
+     sterneJe      {geraet: {e, fr, en}} Sterne je Gerät und Fach, e = reset-Zeitpunkt beim Zählen
+     medaillenT    {"unit>h": Zeitpunkt}
+     tage          {"JJJJ-MM-TT": Antworten}
+     eigene        {id: {fach, name, woerter, t, weg}} eigene Units
+     levelGesehen  {fach: Level-Index}, damit ein Aufstieg nur einmal gefeiert wird
+   ===================================================================== */
+const SPEICHER_KEY = "woerter-reise-v1";
+
+const Speicher = {
+  daten: null,
+  leer() {
+    return { woerter: {}, reset: 0, unitReset: {}, sterneJe: {}, medaillenT: {}, besteSerie: 0, tage: {},
+             eigene: {}, levelGesehen: {}, laufend: null, einstellung: {}, geraet: "" };
+  },
+  laden() {
+    this.daten = this.leer();
+    try {
+      const roh = window.localStorage.getItem(SPEICHER_KEY);
+      if (roh) {
+        const d = JSON.parse(roh);
+        if (d && typeof d === "object") Object.assign(this.daten, d);
+      }
+    } catch (e) { /* privat/gesperrt: ohne Speicher weiter */ }
+    if (!this.daten.geraet) this.daten.geraet = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  },
+  sichern() {
+    try { window.localStorage.setItem(SPEICHER_KEY, JSON.stringify(this.daten)); } catch (e) { /* egal */ }
+  },
+  rec(k) { return this.daten.woerter[k] || null; },
+  merke(k, ergebnis) {
+    const alt = this.daten.woerter[k];
+    const w = alt ? Object.assign({}, alt) : { r: 0, f: 0, a: 0, n: 0 };
+    if (ergebnis === "r") { w.r++; w.n++; }
+    else if (ergebnis === "f") { w.f++; w.n = 0; }
+    else { w.a++; w.n = 0; }
+    w.l = ergebnis;
+    w.t = Date.now();
+    this.daten.woerter[k] = w;
+  },
+  sterne(fach) {
+    const d = this.daten;
+    return Object.values(d.sterneJe).reduce((s, x) => s + (x.e === (d.reset || 0) ? (x[fach] || 0) : 0), 0);
+  },
+  sterneDazu(fach, n) {
+    if (!n) return;
+    const d = this.daten;
+    const meine = d.sterneJe[d.geraet];
+    if (!meine || meine.e !== (d.reset || 0)) d.sterneJe[d.geraet] = { e: d.reset || 0 };
+    d.sterneJe[d.geraet][fach] = (d.sterneJe[d.geraet][fach] || 0) + n;
+  },
+  antwortGezaehlt() {
+    const t = heute();
+    this.daten.tage[t] = (this.daten.tage[t] || 0) + 1;
+  },
+  zuruecksetzen(unitIds) {
+    const jetzt = Date.now();
+    if (!unitIds) {
+      const { einstellung, geraet, eigene, tage } = this.daten;
+      this.daten = this.leer();
+      Object.assign(this.daten, { einstellung, geraet, eigene, tage, reset: jetzt });
+    } else {
+      for (const key of Object.keys(this.daten.woerter)) {
+        if (unitIds.includes(key.split("|")[1])) delete this.daten.woerter[key];
+      }
+      for (const u of unitIds) {
+        this.daten.unitReset[u] = jetzt;
+        delete this.daten.medaillenT[u + ">h"];
+        delete this.daten.medaillenT[u + ">z"];
+      }
+      this.daten.laufend = null;
+    }
+    this.sichern();
+    Online.markiere();
+    Online.abgleichen();
+  },
+};
+
+function heute(d) {
+  const x = d || new Date();
+  return `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+}
+
+/* Tage in Folge: zählt ab heute (oder gestern, wenn heute noch nicht geübt) rückwärts. */
+function tageInFolge(tage) {
+  const d = new Date();
+  if (!tage[heute(d)]) d.setDate(d.getDate() - 1);
+  let n = 0;
+  while (tage[heute(d)]) { n++; d.setDate(d.getDate() - 1); }
+  return n;
+}
+
+/* =====================================================================
+   3b. ONLINE (optional) – Spielname + PIN, Abgleich über Supabase
+   Gleiche Anmeldung wie die anderen Apps (ONLINE_KEY), eigener Spielstand (app).
+   Leere url/anonKey = keine Anmeldung, die App läuft nur lokal.
+   ===================================================================== */
+const ONLINE_KONFIG = {
+  url: "https://devabgaymxbyvsorytsr.supabase.co",
+  anonKey: "sb_publishable_fw-xuREzgvFVC6z_nbM7pA_j9EtlvC5",   // öffentlicher Schlüssel (publishable), darf in der Seite stehen
+  app: "woerter-reise",
+};
+const ONLINE_KEY = "apps-online-v1";   // Anmeldung gilt für alle Apps dieser Adresse
+
+/* Nur diese Felder werden zwischen Geräten abgeglichen. */
+function abgleichTeil(d) {
+  return { woerter: d.woerter || {}, reset: d.reset || 0, unitReset: d.unitReset || {},
+           sterneJe: d.sterneJe || {}, medaillenT: d.medaillenT || {}, besteSerie: d.besteSerie || 0,
+           tage: d.tage || {}, eigene: d.eigene || {}, levelGesehen: d.levelGesehen || {} };
+}
+
+/* Zwei Stände zusammenführen: je Wort und Richtung gewinnt die jüngere Antwort. */
+function zusammenfuehren(a, b) {
+  a = abgleichTeil(a || {}); b = abgleichTeil(b || {});
+  const reset = Math.max(a.reset, b.reset);
+  const maxMap = (x, y) => {
+    const r = {};
+    for (const q of [x, y]) for (const [k, v] of Object.entries(q)) r[k] = Math.max(r[k] || 0, v);
+    return r;
+  };
+  const unitReset = maxMap(a.unitReset, b.unitReset);
+  const grenze = u => Math.max(reset, unitReset[u] || 0);
+
+  const woerter = {};
+  for (const key of new Set([...Object.keys(a.woerter), ...Object.keys(b.woerter)])) {
+    const x = a.woerter[key], y = b.woerter[key];
+    const w = !y ? x : !x ? y : ((y.t || 0) > (x.t || 0) ? y : x);
+    if ((w.t || 0) > grenze(key.split("|")[1])) woerter[key] = w;
+  }
+  const sterneJe = {};
+  for (const id of new Set([...Object.keys(a.sterneJe), ...Object.keys(b.sterneJe)])) {
+    const x = a.sterneJe[id], y = b.sterneJe[id];
+    let s;
+    if (!x || !y) s = x || y;
+    else if (x.e !== y.e) s = x.e > y.e ? x : y;
+    else { s = { e: x.e }; for (const f of Object.keys(FAECHER)) s[f] = Math.max(x[f] || 0, y[f] || 0); }
+    if (s.e >= reset) sterneJe[id] = s;
+  }
+  const medaillenT = {};
+  for (const q of [a.medaillenT, b.medaillenT]) {
+    for (const [m, t] of Object.entries(q)) if (t > grenze(m.split(">")[0])) medaillenT[m] = Math.max(medaillenT[m] || 0, t);
+  }
+  const eigene = {};
+  for (const id of new Set([...Object.keys(a.eigene), ...Object.keys(b.eigene)])) {
+    const x = a.eigene[id], y = b.eigene[id];
+    eigene[id] = !y ? x : !x ? y : ((y.t || 0) > (x.t || 0) ? y : x);
+  }
+  const gleich = a.reset === b.reset;
+  const neuer = a.reset >= b.reset ? a : b;
+  return {
+    woerter, reset, unitReset, sterneJe, medaillenT, eigene,
+    tage: maxMap(a.tage, b.tage),
+    besteSerie: gleich ? Math.max(a.besteSerie, b.besteSerie) : neuer.besteSerie,
+    levelGesehen: gleich ? maxMap(a.levelGesehen, b.levelGesehen) : neuer.levelGesehen,
+  };
+}
+
+/* JSON mit sortierten Schlüsseln, um Stände zu vergleichen. */
+function kanon(x) {
+  if (Array.isArray(x)) return "[" + x.map(kanon).join(",") + "]";
+  if (x && typeof x === "object") return "{" + Object.keys(x).sort().map(k => JSON.stringify(k) + ":" + kanon(x[k])).join(",") + "}";
+  return JSON.stringify(x);
+}
+
+const ONLINE_FEHLER = {
+  name_ungueltig: "Der Spielname braucht 3 bis 20 Zeichen: Buchstaben, Zahlen, Leerzeichen, - oder _.",
+  pin_ungueltig: "Die PIN besteht aus 4 bis 8 Ziffern.",
+  name_vergeben: "Diesen Spielnamen gibt es schon. Wähle einen anderen – oder melde dich an, wenn es deiner ist.",
+  unbekannt: "Diesen Spielnamen gibt es noch nicht. Tippfehler? Sonst «Neu anlegen».",
+  pin_falsch: "Die PIN stimmt nicht.",
+  gesperrt: "Zu viele falsche Versuche. Bitte 15 Minuten warten.",
+  netz: "Keine Verbindung. Ist das Gerät online?",
+  zu_viele: "Gerade wurden zu viele neue Spielstände angelegt. Bitte in einer Stunde nochmals versuchen.",
+  voll: "Im Moment können keine neuen Spielstände angelegt werden.",
+  zu_viele_versuche: "Zu viele falsche PINs von diesem Gerät. Bitte in einer Stunde nochmals versuchen.",
+};
+
+const Online = {
+  z: { token: null, anzeige: null, version: 0, offen: false, gesichert: 0 },
+  status: "",          // "" | "laeuft" | "offline"
+  laeuft: null,
+  antworten: 0,
+  aenderung: 0,
+
+  aktiv() { return Boolean(ONLINE_KONFIG.url && ONLINE_KONFIG.anonKey); },
+  angemeldet() { return this.aktiv() && Boolean(this.z.token); },
+  laden() {
+    try {
+      const roh = window.localStorage.getItem(ONLINE_KEY);
+      if (roh) Object.assign(this.z, JSON.parse(roh));
+    } catch (e) { /* ohne Anmeldung weiter */ }
+    this.z.version = (this.z.versionen && this.z.versionen[ONLINE_KONFIG.app]) || 0;
+    // «offen» gilt je App: andere Apps teilen sich diese Anmeldung
+    this.z.offen = Boolean(this.z.offenJe && this.z.offenJe[ONLINE_KONFIG.app]);
+  },
+  sichern() {
+    // Den gemeinsamen Eintrag frisch lesen, damit Versionen anderer Apps nicht überschrieben werden.
+    let alt = {};
+    try { alt = JSON.parse(window.localStorage.getItem(ONLINE_KEY) || "{}") || {}; } catch (e) { /* egal */ }
+    const gleicherToken = alt.token === this.z.token;
+    this.z.versionen = Object.assign({}, gleicherToken ? alt.versionen : {}, { [ONLINE_KONFIG.app]: this.z.version });
+    this.z.offenJe = Object.assign({}, gleicherToken ? alt.offenJe : {}, { [ONLINE_KONFIG.app]: this.z.offen });
+    try { window.localStorage.setItem(ONLINE_KEY, JSON.stringify(Object.assign({}, alt, this.z))); } catch (e) { /* egal */ }
+  },
+
+  async rpc(funktion, argumente, keepalive) {
+    const antwort = await fetch(`${ONLINE_KONFIG.url}/rest/v1/rpc/${funktion}`, {
+      method: "POST",
+      headers: {
+        apikey: ONLINE_KONFIG.anonKey,
+        Authorization: "Bearer " + ONLINE_KONFIG.anonKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(argumente),
+      keepalive: Boolean(keepalive),
+    });
+    if (!antwort.ok) throw new Error("HTTP " + antwort.status);
+    return antwort.json();
+  },
+
+  async anmelden(name, pin, neu) {
+    let r;
+    try { r = await this.rpc(neu ? "spieler_anlegen" : "anmelden", { p_name: name, p_pin: pin }); }
+    catch (e) { return { fehler: "netz", text: ONLINE_FEHLER.netz }; }
+    if (r.fehler) {
+      let text = ONLINE_FEHLER[r.fehler] || "Das hat nicht geklappt (" + r.fehler + ").";
+      if (r.fehler === "pin_falsch" && r.versuche_uebrig != null) text += ` Noch ${r.versuche_uebrig} ${r.versuche_uebrig === 1 ? "Versuch" : "Versuche"}.`;
+      return { fehler: r.fehler, text };
+    }
+    this.z = { token: r.token, anzeige: r.anzeige, version: 0, versionen: {}, offenJe: {}, offen: true, gesichert: 0 };
+    this.sichern();
+    await this.abgleichen();
+    return { ok: true };
+  },
+
+  async abmelden() {
+    const token = this.z.token;
+    this.z = { token: null, anzeige: null, version: 0, versionen: {}, offenJe: {}, offen: false, gesichert: 0 };
+    try { window.localStorage.setItem(ONLINE_KEY, JSON.stringify(this.z)); } catch (e) { /* egal */ }
+    zeigeOnline();
+    try { if (token) await this.rpc("abmelden", { p_token: token }); } catch (e) { /* egal */ }
+  },
+
+  markiere() {
+    if (!this.angemeldet()) return;
+    this.aenderung++;
+    this.z.offen = true;
+    this.sichern();
+  },
+
+  nachAntwort() {
+    if (!this.angemeldet()) return;
+    this.markiere();
+    if (++this.antworten % 5 === 0) this.abgleichen();
+  },
+
+  /* Laden → zusammenführen → speichern (mit Versionsprüfung, bei Konflikt erneut). */
+  abgleichen(keepalive) {
+    if (!this.angemeldet()) return Promise.resolve("aus");
+    if (this.laeuft) return this.laeuft;
+    this.status = "laeuft";
+    zeigeOnline();
+    this.laeuft = (async () => {
+      try {
+        let r = await this.rpc("stand_laden", { p_token: this.z.token, p_app: ONLINE_KONFIG.app }, keepalive);
+        let stand = this.aenderung;
+        for (let versuch = 0; versuch < 5; versuch++) {
+          if (r.fehler === "sitzung") {
+            this.z.token = null; this.sichern();
+            this.status = "";
+            return "sitzung";
+          }
+          if (r.fehler) throw new Error(r.fehler);
+          if (r.anzeige) this.z.anzeige = r.anzeige;
+          stand = this.aenderung;
+          const vorher = kanon(abgleichTeil(Speicher.daten));
+          const gemeinsam = zusammenfuehren(Speicher.daten, r.daten);
+          Object.assign(Speicher.daten, gemeinsam);
+          Speicher.sichern();
+          if (kanon(gemeinsam) !== vorher) auffrischen();
+          if (r.daten && kanon(gemeinsam) === kanon(abgleichTeil(r.daten))) {
+            this.z.version = r.version; this.z.offen = this.aenderung !== stand; this.z.gesichert = Date.now();
+            this.sichern(); this.status = "";
+            return "ok";
+          }
+          const s = await this.rpc("stand_speichern",
+            { p_token: this.z.token, p_app: ONLINE_KONFIG.app, p_daten: gemeinsam, p_version: r.version }, keepalive);
+          if (s.fehler === "konflikt") { r = { daten: s.daten, version: s.version }; continue; }
+          if (s.fehler === "sitzung") { r = s; continue; }
+          if (s.fehler) throw new Error(s.fehler);
+          this.z.version = s.version; this.z.offen = this.aenderung !== stand; this.z.gesichert = Date.now();
+          this.sichern(); this.status = "";
+          return "ok";
+        }
+        throw new Error("zu viele Konflikte");
+      } catch (e) {
+        this.status = "offline";
+        return "offline";
+      } finally {
+        this.laeuft = null;
+        zeigeOnline();
+        if (this.z.offen && this.status === "" && this.angemeldet()) setTimeout(() => this.abgleichen(), 300);
+      }
+    })();
+    return this.laeuft;
+  },
+};
+
+/* =====================================================================
+   3c. STIMME – Vorlesen und Mikrofon (beides nur, wenn der Browser es kann)
+   ===================================================================== */
+const NEBEN_STIMMEN = /albert|bad news|bahh|bells|boing|bubbles|cellos|wobble|zarvox|trinoids|whisper|jester|organ|superstar|ralph|fred|junior|kathy|good news|hysterical|eddy|flo|grandma|grandpa|reed|rocko|sandy|shelley/i;
+const BESTE_STIMMEN = /premium|enhanced|erweitert|neural|natural|online/i;
+const GUTE_STIMMEN = /thomas|amélie|amelie|aurélie|audrey|marie|daniel|kate|serena|arthur|martha|google/i;
+
+/* Neural-Aufnahmen der eingebauten Units (audio/index.json, erzeugt mit _backend/aussprache/erzeugen.mjs).
+   Fehlt eine Aufnahme (eigene Units, offline), liest die Gerätestimme vor. */
+const Aufnahmen = {
+  dateien: null, stimmen: {}, laden: null,
+  lade() {
+    if (!this.laden) this.laden = fetch("audio/index.json")
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { this.dateien = (j && j.dateien) || {}; this.stimmen = (j && j.stimmen) || {}; })
+      .catch(() => { this.dateien = {}; });
+    return this.laden;
+  },
+  schluessel(text, lang) { return lang + "|" + String(text).replace(/[()]/g, "").normalize("NFC").replace(/\s+/g, " ").trim(); },
+  async datei(text, lang) {
+    await this.lade();
+    return this.dateien[this.schluessel(text, lang)] || null;
+  },
+  stimmeName(lang) { const v = this.stimmen[lang]; return v ? v.replace(/^[a-z]{2}-[A-Z]{2}-/, "").replace(/Neural$/, "") : ""; },
+};
+
+/* Sehr kurze stille WAV, um auf iOS die Tonausgabe mit der ersten Berührung freizuschalten. */
+function stilleWav() {
+  const n = 800, buf = new ArrayBuffer(44 + n), d = new DataView(buf);
+  const txt = (o, t) => { for (let i = 0; i < t.length; i++) d.setUint8(o + i, t.charCodeAt(i)); };
+  txt(0, "RIFF"); d.setUint32(4, 36 + n, true); txt(8, "WAVEfmt "); d.setUint32(16, 16, true);
+  d.setUint16(20, 1, true); d.setUint16(22, 1, true); d.setUint32(24, 8000, true); d.setUint32(28, 8000, true);
+  d.setUint16(32, 1, true); d.setUint16(34, 8, true); txt(36, "data"); d.setUint32(40, n, true);
+  for (let i = 0; i < n; i++) d.setUint8(44 + i, 128);
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
+const Stimme = {
+  stimmen: [],
+  entsperrt: false,
+  spieler: null,
+  kannGeraet() { return "speechSynthesis" in window && "SpeechSynthesisUtterance" in window; },
+  kann() { return this.kannGeraet() || typeof Audio !== "undefined"; },
+  init() {
+    try { this.spieler = new Audio(); this.spieler.preload = "auto"; } catch (e) { this.spieler = null; }
+    Aufnahmen.lade();
+    if (this.spieler) {
+      const freischalten = () => {
+        try { this.spieler.src = stilleWav(); const p = this.spieler.play(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* egal */ }
+      };
+      document.addEventListener("pointerdown", freischalten, { once: true, capture: true });
+      document.addEventListener("keydown", freischalten, { once: true, capture: true });
+    }
+    if (!this.kannGeraet()) return;
+    const lade = () => { this.stimmen = window.speechSynthesis.getVoices() || []; };
+    lade();
+    try { window.speechSynthesis.addEventListener("voiceschanged", lade); } catch (e) { window.speechSynthesis.onvoiceschanged = lade; }
+    // iOS: Sprache erst nach einer Berührung erlaubt – beim ersten Tippen still «entsperren».
+    const entsperre = () => {
+      if (this.entsperrt) return;
+      this.entsperrt = true;
+      try { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; window.speechSynthesis.speak(u); } catch (e) { /* egal */ }
+    };
+    document.addEventListener("pointerdown", entsperre, { once: true, capture: true });
+    document.addEventListener("keydown", entsperre, { once: true, capture: true });
+  },
+  /* Beste Stimme der Sprache: Premium/erweitert vor bekannten guten vor irgendeiner, nie eine andere Sprache. */
+  waehle(lang) {
+    const genau = this.stimmen.filter(v => v.lang && v.lang.replace("_", "-").toLowerCase() === lang.toLowerCase());
+    const sprache = this.stimmen.filter(v => v.lang && v.lang.toLowerCase().startsWith(lang.slice(0, 2)));
+    for (const liste of [genau, sprache]) {
+      const brauchbar = liste.filter(v => !NEBEN_STIMMEN.test(v.name));
+      const wahl = brauchbar.find(v => BESTE_STIMMEN.test(v.name)) || brauchbar.find(v => GUTE_STIMMEN.test(v.name)) || brauchbar[0];
+      if (wahl) return wahl;
+    }
+    return null;
+  },
+  /* Wartet kurz, bis der Browser seine Stimmen geladen hat (Chrome/Safari laden sie verzögert). */
+  bereit() {
+    if (!this.kannGeraet() || this.stimmen.length) return Promise.resolve();
+    return new Promise(fertig => {
+      const t0 = Date.now();
+      const pruefe = () => {
+        this.stimmen = window.speechSynthesis.getVoices() || [];
+        if (this.stimmen.length || Date.now() - t0 > 1500) fertig(); else setTimeout(pruefe, 100);
+      };
+      pruefe();
+    });
+  },
+  /* Spricht text; das Versprechen erfüllt sich am Ende (oder spätestens nach 6 s). */
+  async sprich(text, lang) {
+    if (!text) return;
+    const datei = await Aufnahmen.datei(text, lang);
+    if (datei && await this.spiele(datei)) return;
+    if (!this.kannGeraet()) return;
+    await this.bereit();
+    const v = this.waehle(lang);
+    // Ohne passende Stimme lieber schweigen: sonst liest die deutsche Standardstimme Französisch vor.
+    if (!v && this.stimmen.length) { zeigeStimmeFehlt(lang); return; }
+    return new Promise(fertig => {
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text.replace(/[()]/g, ""));
+        u.lang = lang;
+        if (v) u.voice = v;
+        u.rate = ui.langsam ? 0.65 : 0.9;
+        const timer = setTimeout(fertig, 6000);
+        u.onend = u.onerror = () => { clearTimeout(timer); fertig(); };
+        window.speechSynthesis.speak(u);
+      } catch (e) { fertig(); }
+    });
+  },
+  /* Spielt eine Aufnahme; erfüllt sich mit true, wenn sie lief, sonst false (dann Gerätestimme). */
+  spiele(datei) {
+    const p = this.spieler;
+    if (!p) return Promise.resolve(false);
+    this.still();
+    return new Promise(fertig => {
+      let lief = false;
+      const ende = ok => { clearTimeout(timer); p.onended = p.onerror = null; fertig(ok); };
+      const timer = setTimeout(() => ende(lief), 8000);
+      p.onended = () => ende(true);
+      p.onerror = () => ende(false);
+      try {
+        p.src = "audio/" + datei;
+        const tempo = ui.langsam ? 0.75 : 1;
+        p.defaultPlaybackRate = tempo; p.playbackRate = tempo;
+        p.preservesPitch = true; p.webkitPreservesPitch = true;
+        const versuch = p.play();
+        if (versuch && versuch.then) versuch.then(() => { lief = true; }, () => ende(false)); else lief = true;
+      } catch (e) { ende(false); }
+    });
+  },
+  still() {
+    try { if (this.spieler) this.spieler.pause(); } catch (e) { /* egal */ }
+    try { if (this.kannGeraet()) window.speechSynthesis.cancel(); } catch (e) { /* egal */ }
+  },
+};
+
+let stimmeFehltGezeigt = false;
+function zeigeStimmeFehlt(lang) {
+  if (stimmeFehltGezeigt) return;
+  stimmeFehltGezeigt = true;
+  const n = Object.values(FAECHER).find(f => f.stimme === lang);
+  window.alert(`Auf diesem Gerät ist keine ${n ? n.name.toLowerCase().replace(/isch$/, "ische") : ""} Stimme installiert.\n\niPad/iPhone: Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen.`);
+}
+
+const Erkenner = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+
+/* =====================================================================
+   4. LOGIK
+   ===================================================================== */
+function mische(arr) { // Fisher-Yates
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/* Wie oft muss ein Wort in Folge richtig sein, bis es im Himmel ist? */
+function noetig(w) {
+  if (!w) return 1;
+  if ((w.f || 0) >= 2) return 3;
+  return (w.f || 0) + (w.a || 0) > 0 ? 2 : 1;
+}
+function zustandRec(w) {
+  if (!w) return "neu";
+  if (w.l === "f") return "hoelle";
+  if (w.l === "a") return "wackel";
+  return w.n >= noetig(w) ? "himmel" : "wackel";
+}
+function zustandDir(e, dir) { return zustandRec(Speicher.rec(e.key + "#" + dir)); }
+
+/* Zustand für die gewählte Richtung; «m» (gemischt) = der schlechtere beider Richtungen. */
+function zustand(e, richtung) {
+  if (richtung !== "m") return zustandDir(e, richtung);
+  const a = zustandDir(e, "h"), b = zustandDir(e, "z");
+  if (a === "hoelle" || b === "hoelle") return "hoelle";
+  if (a === "wackel" || b === "wackel") return "wackel";
+  if (a === "himmel" && b === "himmel") return "himmel";
+  return "neu";
+}
+function falschZahl(e, richtung) {
+  const f = d => (Speicher.rec(e.key + "#" + d) || {}).f || 0;
+  return richtung === "m" ? f("h") + f("z") : f(richtung);
+}
+function istSchwierig(e, richtung) { return falschZahl(e, richtung) >= 2; }
+
+const RANG = { hoelle: 0, wackel: 1, neu: 2, himmel: 3 };
+function richtungFuer(e, richtung) {
+  if (richtung !== "m") return richtung;
+  const a = zustandDir(e, "h"), b = zustandDir(e, "z");
+  if (RANG[a] !== RANG[b]) return RANG[a] < RANG[b] ? "h" : "z";
+  return Math.random() < 0.5 ? "h" : "z";
+}
+
+function statistik(eintraege, richtung) {
+  const st = { total: eintraege.length, himmel: 0, wackel: 0, hoelle: 0, neu: 0, schwierig: 0 };
+  for (const e of eintraege) {
+    st[zustand(e, richtung)]++;
+    if (istSchwierig(e, richtung)) st.schwierig++;
+  }
+  return st;
+}
+
+function passtModus(e, richtung, modus) {
+  const z = zustand(e, richtung);
+  if (modus === "offen") return z !== "himmel";
+  if (modus === "fehler") return z === "hoelle" || z === "wackel";
+  if (modus === "schwierig") return istSchwierig(e, richtung);
+  return true;
+}
+
+function poolFuer(unitIds, richtung, modus) {
+  const pool = [];
+  for (const id of unitIds) for (const e of (KATALOG.unit[id] || {}).eintraege || []) if (passtModus(e, richtung, modus)) pool.push(e);
+  return pool;
+}
+
+/* Zieht n verschiedene Wörter; Hölle dreifach, Wackel doppelt gewichtet. Rückgabe: Liste «key#dir». */
+function ziehe(pool, n, richtung) {
+  const gewicht = e => ({ hoelle: 3, wackel: 2 })[zustand(e, richtung)] || 1;
+  let wahl;
+  if (n >= pool.length) wahl = pool;
+  else {
+    const k = pool.map(e => ({ e, k: -Math.log(1 - Math.random()) / gewicht(e) }));
+    k.sort((a, b) => a.k - b.k);
+    wahl = k.slice(0, n).map(x => x.e);
+  }
+  return mische(wahl).map(e => e.key + "#" + richtungFuer(e, richtung));
+}
+
+function levelIndex(fach, sterne) {
+  const L = FAECHER[fach].levels;
+  let i = 0;
+  L.forEach((l, k) => { if (sterne >= l.ab) i = k; });
+  return i;
+}
+
+function neueRunde(items, einst) {
+  return { items, index: 0, richtig: 0, fast: 0, fehler: [], serie: 0, sterne: 0,
+           fach: einst.fach, abfrage: einst.abfrage, richtung: einst.richtung };
+}
+
+/* Frage und Ziel je nach Richtung. */
+function teile(item) {
+  const [key, dir] = item.split("#");
+  const e = KATALOG.eintrag[key];
+  const fach = FAECHER[e.fach];
+  return dir === "h"
+    ? { e, dir, frage: e.de, ziel: e.fremd, frageLang: "de-CH", zielSprache: fach.sprache, zielStimme: fach.stimme, fremdIstFrage: false }
+    : { e, dir, frage: e.fremd, ziel: e.de, frageLang: fach.stimme, zielSprache: "de", zielStimme: "de-DE", fremdIstFrage: true };
+}
+const zeigeAlt = alts => alts.join(" / ");
+
+/**
+ * Antwort verbuchen. ergebnis: r | a | f
+ * Gibt { neueSterne, vorher, nachher, belohnungen, serieErreicht } zurück und merkt sich einen Rückweg für «Das war richtig».
+ */
+function werteAus(runde, ergebnis, mitSchreiben) {
+  const item = runde.items[runde.index];
+  const t = teile(item);
+  const rueck = { item, rec: Speicher.rec(item) ? Object.assign({}, Speicher.rec(item)) : null,
+                  runde: JSON.stringify(runde), sterne: 0 };
+  const vorher = zustandRec(Speicher.rec(item));
+  Speicher.merke(item, ergebnis);
+  const nachher = zustandRec(Speicher.rec(item));
+  let neueSterne = 0, serieErreicht = false;
+  if (ergebnis === "r") {
+    runde.richtig++;
+    runde.serie++;
+    neueSterne = 1 + (mitSchreiben ? 1 : 0) + (vorher === "hoelle" ? 1 : 0) + (vorher === "wackel" && nachher === "himmel" ? 1 : 0);
+    if (runde.serie % 5 === 0) { neueSterne += 3; serieErreicht = true; }
+    Speicher.daten.besteSerie = Math.max(Speicher.daten.besteSerie || 0, runde.serie);
+  } else {
+    if (ergebnis === "a") runde.fast++;
+    runde.fehler.push(item);
+    runde.serie = 0;
+  }
+  rueck.sterne = neueSterne;
+  runde.sterne += neueSterne;
+  Speicher.sterneDazu(t.e.fach, neueSterne);
+  Speicher.antwortGezaehlt();
+  runde.index++;
+  Speicher.daten.laufend = runde.index < runde.items.length ? runde : null;
+  const belohnungen = pruefeBelohnungen(t.e.fach);
+  Speicher.sichern();
+  Online.nachAntwort();
+  ui.rueck = rueck;
+  return { t, vorher, nachher, neueSterne, serieErreicht, belohnungen };
+}
+
+/* «Das war richtig»: letzte Antwort zurücknehmen und als richtig zählen. */
+function nimmZurueck() {
+  const r = ui.rueck;
+  if (!r) return null;
+  if (r.rec) Speicher.daten.woerter[r.item] = r.rec; else delete Speicher.daten.woerter[r.item];
+  ui.runde = JSON.parse(r.runde);
+  Speicher.daten.laufend = ui.runde;
+  ui.rueck = null;
+  const tag = heute();
+  if (Speicher.daten.tage[tag]) Speicher.daten.tage[tag]--;
+  return werteAus(ui.runde, "r", true);
+}
+
+/* Neues Level oder neue Medaille? */
+function pruefeBelohnungen(fach) {
+  const neu = [];
+  const d = Speicher.daten;
+  const lvl = levelIndex(fach, Speicher.sterne(fach));
+  if (lvl > (d.levelGesehen[fach] || 0)) {
+    d.levelGesehen[fach] = lvl;
+    const L = FAECHER[fach].levels[lvl];
+    neu.push({ icon: L.icon, titel: "Neues Level!", text: `${FAECHER[fach].flagge} ${L.name}` });
+  }
+  for (const u of KATALOG.units.filter(x => x.fach === fach && x.eintraege.length)) {
+    for (const dir of ["h", "z"]) {
+      const m = u.id + ">" + dir;
+      if (d.medaillenT[m]) continue;
+      if (u.eintraege.every(e => zustandDir(e, dir) === "himmel")) {
+        d.medaillenT[m] = Date.now();
+        const beide = d.medaillenT[u.id + ">h"] && d.medaillenT[u.id + ">z"];
+        neu.push(beide
+          ? { icon: "🥇", titel: `«${u.name}» gemeistert!`, text: "In beide Richtungen sind alle Wörter im Himmel." }
+          : { icon: "🥈", titel: `«${u.name}» – eine Richtung geschafft!`,
+              text: (dir === "h" ? "Deutsch → " + FAECHER[fach].name : FAECHER[fach].name + " → Deutsch") + ": alles im Himmel. Jetzt noch umgekehrt für Gold!" });
+      }
+    }
+  }
+  return neu;
+}
+
+function medailleVon(unitId) {
+  const m = Speicher.daten.medaillenT;
+  const n = (m[unitId + ">h"] ? 1 : 0) + (m[unitId + ">z"] ? 1 : 0);
+  return n === 2 ? "🥇" : n === 1 ? "🥈" : "";
+}
+
+/* =====================================================================
+   5. DARSTELLUNG
+   ===================================================================== */
+const $ = id => document.getElementById(id);
+
+/* Katalog aus eingebauten und eigenen Units. */
+let KATALOG = { units: [], unit: {}, eintrag: {}, fehler: [] };
+function baueKatalog() {
+  const units = [], fehler = [];
+  const quellen = [...UNITS.map(u => Object.assign({ eigen: false }, u)),
+    ...Object.entries(Speicher.daten.eigene || {}).filter(([, u]) => u && !u.weg && FAECHER[u.fach])
+      .sort((a, b) => (a[1].erstellt || 0) - (b[1].erstellt || 0))
+      .map(([id, u]) => Object.assign({}, u, { id, eigen: true }))];
+  for (const u of quellen) {
+    const p = parseUnit(u, false);
+    if (!u.eigen) {
+      fehler.push(...p.fehler);
+      if (KONTROLLE[u.id] !== undefined && KONTROLLE[u.id] !== p.eintraege.length) fehler.push(`${u.name}: ${p.eintraege.length} Wörter statt ${KONTROLLE[u.id]}`);
+    }
+    units.push(Object.assign({}, u, { eintraege: p.eintraege }));
+  }
+  KATALOG = {
+    units, fehler,
+    unit: Object.fromEntries(units.map(u => [u.id, u])),
+    eintrag: Object.fromEntries(units.flatMap(u => u.eintraege.map(e => [e.key, e]))),
+  };
+}
+const unitsVon = fach => KATALOG.units.filter(u => u.fach === fach);
+const eintraegeVon = ids => ids.flatMap(id => (KATALOG.unit[id] || {}).eintraege || []);
+
+const ui = {
+  fach: "fr",
+  auswahl: { fr: new Set(), en: new Set() },
+  richtung: "h",
+  abfrage: "schreiben",
+  modus: "offen",
+  laenge: "20",
+  vorlesen: true,
+  langsam: false,
+  runde: null,
+  phase: "frage",     // frage | antwort
+  timer: null,
+  warteschlange: [],
+  rueck: null,
+  listeFilter: "alle",
+  erkennung: null,
+};
+
+function einstellungMerken() {
+  Speicher.daten.einstellung = {
+    fach: ui.fach, richtung: ui.richtung, abfrage: ui.abfrage, modus: ui.modus, laenge: ui.laenge,
+    vorlesen: ui.vorlesen, langsam: ui.langsam,
+    auswahl: { fr: [...ui.auswahl.fr], en: [...ui.auswahl.en] },
+  };
+  Speicher.sichern();
+}
+
+function zeige(bildschirm) {
+  for (const id of ["start", "spiel", "ende", "liste"]) $(id).hidden = id !== bildschirm;
+  window.scrollTo(0, 0);
+}
+
+function setzeBalken(el, st) {
+  const [h, w, l] = el.children;
+  const p = n => (st.total ? 100 * n / st.total : 0) + "%";
+  h.style.width = p(st.himmel);
+  w.style.width = p(st.wackel);
+  l.style.width = p(st.hoelle);
+}
+
+function richtungsName(r, fach) {
+  const f = FAECHER[fach];
+  return r === "h" ? `🇨🇭 Deutsch → ${f.flagge} ${f.name}` : r === "z" ? `${f.flagge} ${f.name} → 🇨🇭 Deutsch` : "🔀 Gemischt";
+}
+
+function levelInfo(fach) {
+  const sterne = Speicher.sterne(fach);
+  const L = FAECHER[fach].levels;
+  const i = levelIndex(fach, sterne);
+  const n = L[i + 1];
+  return {
+    icon: L[i].icon, name: L[i].name, sterne,
+    naechst: n ? `Noch ${n.ab - sterne} ⭐ bis ${n.icon} ${n.name}` : "Ganz oben angekommen! 🎉",
+  };
+}
+
+function legendeHtml(st) {
+  return `<span><span class="punkt" style="background:var(--himmel)"></span>Himmel <b>${st.himmel}</b></span>` +
+    `<span><span class="punkt" style="background:var(--wackel)"></span>Wackel <b>${st.wackel}</b></span>` +
+    `<span><span class="punkt" style="background:var(--hoelle)"></span>Hölle <b>${st.hoelle}</b></span>` +
+    `<span><span class="punkt" style="background:var(--neu)"></span>Neu <b>${st.neu}</b></span>` +
+    `<span>🧠 Schwierige <b>${st.schwierig}</b></span>`;
+}
+
+function baueLevelKarte() {
+  const fach = ui.fach;
+  const li = levelInfo(fach);
+  $("levelIcon").textContent = li.icon;
+  $("levelName").textContent = li.name;
+  $("levelNaechst").textContent = li.naechst;
+  $("sterneTotal").textContent = li.sterne;
+  const st = statistik(eintraegeVon(unitsVon(fach).map(u => u.id)), ui.richtung);
+  setzeBalken($("gesamtBalken"), st);
+  $("gesamtLegende").innerHTML = legendeHtml(st);
+  const tage = Speicher.daten.tage || {};
+  const folge = tageInFolge(tage);
+  $("tageszeile").innerHTML = "";
+  const a = document.createElement("span");
+  a.textContent = `📅 ${folge} ${folge === 1 ? "Tag" : "Tage"} in Folge`;
+  const b = document.createElement("span");
+  b.textContent = `Heute ${tage[heute()] || 0} Antworten`;
+  $("tageszeile").append(a, b);
+  const box = $("medaillen");
+  box.textContent = "";
+  for (const u of unitsVon(fach)) {
+    const m = document.createElement("span");
+    const med = medailleVon(u.id);
+    m.className = "medaille" + (med ? "" : " leer");
+    m.textContent = (med || "○") + " " + u.name;
+    box.appendChild(m);
+  }
+}
+
+/* ---------- Online-Anzeige ---------- */
+function uhrzeit(ms) { return new Date(ms).toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit" }); }
+
+function zeigeOnline() {
+  const box = $("onlineBox");
+  box.hidden = !Online.aktiv();
+  if (!Online.aktiv()) return;
+  const an = Online.angemeldet();
+  box.classList.toggle("an", an);
+  $("onlineBtn").hidden = an;
+  $("abmeldenBtn").hidden = !an;
+  $("gruss").textContent = an && Online.z.anzeige ? `Hallo ${Online.z.anzeige}! 👋` : "Hallo! 👋";
+  const t = $("onlineText");
+  t.textContent = "";
+  if (!an) { t.textContent = "☁️ Melde dich an, dann ist dein Stand auf jedem Gerät da."; return; }
+  const name = document.createElement("b");
+  name.textContent = Online.z.anzeige || "";
+  const zusatz =
+    Online.status === "laeuft" ? " · wird gesichert …" :
+    Online.status === "offline" ? " · offline, wird später gesichert" :
+    Online.z.offen ? " · noch nicht gesichert" :
+    Online.z.gesichert ? ` · gesichert um ${uhrzeit(Online.z.gesichert)}` : "";
+  t.append("☁️ Angemeldet als ", name, zusatz);
+}
+
+/* Nach einem Abgleich die Anzeige auffrischen, ohne eine laufende Frage zu stören. */
+function auffrischen() {
+  baueKatalog();
+  if (!$("start").hidden) baueStart();
+  if (!$("liste").hidden) baueListe();
+}
+
+function oeffneLogin() {
+  $("loginFehler").textContent = "";
+  $("loginPin").value = "";
+  $("loginOverlay").hidden = false;
+  $("loginName").focus();
+}
+function schliesseLogin() { $("loginOverlay").hidden = true; }
+
+async function loginAusfuehren(neu) {
+  const name = $("loginName").value.trim();
+  const pin = $("loginPin").value.trim();
+  if (name.length < 3) { $("loginFehler").textContent = ONLINE_FEHLER.name_ungueltig; $("loginName").focus(); return; }
+  if (!/^[0-9]{4,8}$/.test(pin)) { $("loginFehler").textContent = ONLINE_FEHLER.pin_ungueltig; $("loginPin").focus(); return; }
+  if (neu && !window.confirm(`Neuen Spielstand «${name}» anlegen?\n\nSchreib dir Spielname und PIN auf – damit meldest du dich auf anderen Geräten an.`)) return;
+  for (const b of [$("loginBtn"), $("neuBtn")]) b.disabled = true;
+  $("loginFehler").textContent = "";
+  const r = await Online.anmelden(name, pin, neu);
+  for (const b of [$("loginBtn"), $("neuBtn")]) b.disabled = false;
+  if (r.fehler) { $("loginFehler").textContent = r.text; return; }
+  schliesseLogin();
+  baueStart();
+}
+
+$("onlineBtn").addEventListener("click", oeffneLogin);
+$("loginAbbrechen").addEventListener("click", schliesseLogin);
+$("loginForm").addEventListener("submit", ev => { ev.preventDefault(); loginAusfuehren(false); });
+$("neuBtn").addEventListener("click", () => loginAusfuehren(true));
+$("loginName").addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); $("loginPin").focus(); } });
+$("abmeldenBtn").addEventListener("click", () => {
+  if (window.confirm("Abmelden? Dein Stand bleibt online gespeichert und auf diesem Gerät erhalten.")) Online.abmelden();
+});
+
+/* ---------- Start ---------- */
+function chip(name, info, daten) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "chip";
+  Object.assign(b.dataset, daten);
+  const n = document.createElement("span");
+  n.className = "name";
+  n.textContent = name;
+  b.appendChild(n);
+  if (info !== null) {
+    const i = document.createElement("span");
+    i.className = "info";
+    i.textContent = info;
+    b.appendChild(i);
+  }
+  return b;
+}
+
+function baueStart() {
+  const fw = $("fachWahl");
+  fw.textContent = "";
+  for (const f of Object.values(FAECHER)) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "fach";
+    b.dataset.fach = f.id;
+    b.setAttribute("aria-pressed", String(f.id === ui.fach));
+    const fl = document.createElement("span");
+    fl.className = "fl";
+    fl.textContent = f.flagge;
+    b.append(fl, f.name);
+    fw.appendChild(b);
+  }
+
+  baueLevelKarte();
+  zeigeOnline();
+
+  const lauf = Speicher.daten.laufend;
+  const laufOk = lauf && Array.isArray(lauf.items) && lauf.items.every(k => KATALOG.eintrag[k.split("#")[0]]) && lauf.index < lauf.items.length;
+  $("weiterBox").hidden = !laufOk;
+  if (laufOk) $("weiterInfo").textContent = `${FAECHER[lauf.fach].flagge} Wort ${lauf.index + 1} von ${lauf.items.length} · ✅ ${lauf.richtig} 🔥 ${lauf.fehler.length}`;
+
+  const box = $("unitWahl");
+  box.textContent = "";
+  const units = unitsVon(ui.fach);
+  if (units.length > 1) {
+    const alle = chip("Alle gemischt", null, { unit: "*" });
+    alle.classList.add("alle");
+    box.appendChild(alle);
+  }
+  for (const u of units) {
+    const st = statistik(u.eintraege, ui.richtung);
+    const b = chip((u.eigen ? "✏️ " : "") + u.name, `☁️ ${st.himmel} 🌀 ${st.wackel} 🔥 ${st.hoelle} von ${st.total}`, { unit: u.id });
+    const mini = document.createElement("span");
+    mini.className = "mini";
+    mini.innerHTML = '<div class="h"></div><div class="w"></div><div class="l"></div>';
+    setzeBalken(mini, st);
+    b.appendChild(mini);
+    const med = medailleVon(u.id);
+    if (med) {
+      const k = document.createElement("span");
+      k.className = "krone";
+      k.textContent = med;
+      b.appendChild(k);
+    }
+    box.appendChild(b);
+  }
+  const neu = chip("➕ Eigene Unit", null, { neuUnit: "1" });
+  neu.classList.add("neu-unit");
+  box.appendChild(neu);
+
+  const rw = $("richtungWahl");
+  rw.textContent = "";
+  rw.append(
+    chip(richtungsName("h", ui.fach), "schwieriger: selbst übersetzen", { richtung: "h" }),
+    chip(richtungsName("z", ui.fach), "einfacher: verstehen", { richtung: "z" }),
+    chip(richtungsName("m", ui.fach), "beide Richtungen durcheinander", { richtung: "m" }),
+  );
+
+  const lw = $("laengenWahl");
+  lw.textContent = "";
+  for (const l of RUNDEN_LAENGEN) lw.appendChild(chip(l === "alle" ? "Alle" : l, null, { laenge: l }));
+
+  $("infoMuendlich").textContent = Erkenner ? "laut sagen oder 🎤 ins Mikrofon, dann selbst bewerten" : "laut sagen, Lösung zeigen, selbst bewerten";
+  $("stimmeBox").hidden = !Stimme.kann();
+  $("stimmeHinweis").hidden = Stimme.kann();
+  $("vorlesenSchalter").checked = ui.vorlesen;
+  Promise.all([Stimme.bereit(), Aufnahmen.lade()]).then(() => {
+    const lang = FAECHER[ui.fach].stimme;
+    const v = Stimme.kannGeraet() ? Stimme.waehle(lang) : null;
+    const neural = Aufnahmen.stimmeName(lang);
+    const geraet = v ? `${v.name} (${v.lang})` : `keine ${FAECHER[ui.fach].name}-Stimme auf diesem Gerät`;
+    $("stimmeName").textContent = neural
+      ? `Stimme: ${neural} (Aufnahme) · eigene Units: ${geraet}`
+      : v ? `Stimme: ${geraet}` : `Keine ${FAECHER[ui.fach].name}-Stimme auf diesem Gerät gefunden.`;
+  });
+  $("langsamSchalter").checked = ui.langsam;
+
+  aktualisiereStart();
+
+  $("datenWarnung").hidden = !KATALOG.fehler.length;
+  $("datenWarnung").textContent = KATALOG.fehler.length ? "Datenfehler: " + KATALOG.fehler.join(" · ") : "";
+}
+
+function aktualisiereStart() {
+  const units = unitsVon(ui.fach);
+  const auswahl = ui.auswahl[ui.fach];
+  for (const id of [...auswahl]) if (!KATALOG.unit[id]) auswahl.delete(id);
+  const alleGewaehlt = units.length && units.every(u => auswahl.has(u.id));
+  for (const b of $("unitWahl").querySelectorAll(".chip")) {
+    if (b.dataset.neuUnit) continue;
+    const id = b.dataset.unit;
+    b.setAttribute("aria-pressed", String(id === "*" ? Boolean(alleGewaehlt) : auswahl.has(id)));
+  }
+  for (const b of $("richtungWahl").querySelectorAll(".chip")) b.setAttribute("aria-pressed", String(b.dataset.richtung === ui.richtung));
+  for (const b of $("abfrageWahl").querySelectorAll(".chip")) b.setAttribute("aria-pressed", String(b.dataset.abfrage === ui.abfrage));
+  for (const b of $("laengenWahl").querySelectorAll(".chip")) b.setAttribute("aria-pressed", String(b.dataset.laenge === ui.laenge));
+  for (const b of $("modusWahl").querySelectorAll(".chip")) b.setAttribute("aria-pressed", String(b.dataset.modus === ui.modus));
+
+  const ids = [...auswahl];
+  const anzahl = m => poolFuer(ids, ui.richtung, m).length;
+  const wort = n => `${n} ${n === 1 ? "Wort" : "Wörter"}`;
+  $("infoOffen").textContent = ids.length ? `${wort(anzahl("offen"))} – neue, Wackel und Hölle` : "neue, Wackel und Hölle";
+  $("infoFehler").textContent = ids.length ? `${wort(anzahl("fehler"))} – zuletzt falsch oder wackelig` : "zuletzt falsch oder wackelig";
+  $("infoSchwierig").textContent = ids.length ? `${wort(anzahl("schwierig"))} – mind. 2× falsch, auch im Himmel` : "mind. 2× falsch, auch wenn im Himmel";
+  $("infoAlle").textContent = ids.length ? `${wort(anzahl("alle"))} – auch die aus dem Himmel` : "auch die aus dem Himmel, z. B. vor der Prüfung";
+
+  const n = anzahl(ui.modus);
+  const runde = ui.laenge === "alle" ? n : Math.min(n, Number(ui.laenge));
+  $("losBtn").disabled = runde === 0;
+  $("auswahlInfo").textContent =
+    !ids.length ? "Wähle mindestens eine Unit." :
+    n === 0 ? (ui.modus === "offen" ? "Alles im Himmel! 🎉" : ui.modus === "fehler" ? "Keine Fehler und keine Wackelkandidaten! 🎉" : "Keine schwierigen Wörter. 🎉") :
+    `${runde} von ${n} ${n === 1 ? "Wort" : "Wörtern"}`;
+}
+
+$("fachWahl").addEventListener("click", ev => {
+  const b = ev.target.closest(".fach");
+  if (!b) return;
+  ui.fach = b.dataset.fach;
+  einstellungMerken();
+  baueStart();
+});
+$("unitWahl").addEventListener("click", ev => {
+  const b = ev.target.closest(".chip");
+  if (!b) return;
+  if (b.dataset.neuUnit) { oeffneUnit(null); return; }
+  const auswahl = ui.auswahl[ui.fach];
+  const units = unitsVon(ui.fach);
+  const id = b.dataset.unit;
+  if (id === "*") ui.auswahl[ui.fach] = new Set(units.every(u => auswahl.has(u.id)) ? [] : units.map(u => u.id));
+  else if (auswahl.has(id)) auswahl.delete(id);
+  else auswahl.add(id);
+  einstellungMerken();
+  aktualisiereStart();
+});
+$("richtungWahl").addEventListener("click", ev => {
+  const b = ev.target.closest(".chip");
+  if (b) { ui.richtung = b.dataset.richtung; einstellungMerken(); baueStart(); }
+});
+$("abfrageWahl").addEventListener("click", ev => {
+  const b = ev.target.closest(".chip");
+  if (b) { ui.abfrage = b.dataset.abfrage; einstellungMerken(); aktualisiereStart(); }
+});
+$("laengenWahl").addEventListener("click", ev => {
+  const b = ev.target.closest(".chip");
+  if (b) { ui.laenge = b.dataset.laenge; einstellungMerken(); aktualisiereStart(); }
+});
+$("modusWahl").addEventListener("click", ev => {
+  const b = ev.target.closest(".chip");
+  if (b) { ui.modus = b.dataset.modus; einstellungMerken(); aktualisiereStart(); }
+});
+$("vorlesenSchalter").addEventListener("change", ev => { ui.vorlesen = ev.target.checked; einstellungMerken(); });
+$("langsamSchalter").addEventListener("change", ev => {
+  ui.langsam = ev.target.checked;
+  einstellungMerken();
+  Stimme.sprich(ui.fach === "fr" ? "Bonjour !" : "Hello!", FAECHER[ui.fach].stimme);
+});
+
+function starteMitEinstellung() {
+  const pool = poolFuer([...ui.auswahl[ui.fach]], ui.richtung, ui.modus);
+  if (!pool.length) return false;
+  einstellungMerken();
+  starteRunde(ziehe(pool, ui.laenge === "alle" ? pool.length : Number(ui.laenge), ui.richtung));
+  return true;
+}
+
+$("losBtn").addEventListener("click", () => {
+  if (Speicher.daten.laufend && !window.confirm("Die angefangene Runde wird verworfen. Neue Runde starten?")) return;
+  starteMitEinstellung();
+});
+$("weiterspielenBtn").addEventListener("click", () => {
+  ui.runde = Speicher.daten.laufend;
+  zeige("spiel");
+  zeigeFrage();
+});
+$("resetAuswahlBtn").addEventListener("click", () => {
+  const ids = [...ui.auswahl[ui.fach]];
+  if (!ids.length) { window.alert("Zuerst oben die Units auswählen, die zurückgesetzt werden sollen."); return; }
+  const namen = ids.map(id => KATALOG.unit[id].name).join(", ");
+  if (window.confirm(`Himmel, Wackel und Hölle für ${namen} löschen (beide Richtungen)?`)) { Speicher.zuruecksetzen(ids); baueStart(); }
+});
+$("resetAlleBtn").addEventListener("click", () => {
+  if (window.confirm("Wirklich alles zurücksetzen? Lernstand, Sterne, Levels und Medaillen in beiden Fächern werden gelöscht. Eigene Units bleiben.")) {
+    Speicher.zuruecksetzen(null); baueStart();
+  }
+});
+$("listeBtn").addEventListener("click", () => { baueListe(); zeige("liste"); });
+
+/* ---------- Spiel ---------- */
+function starteRunde(items) {
+  ui.runde = neueRunde(items, { fach: ui.fach, abfrage: ui.abfrage, richtung: ui.richtung });
+  Speicher.daten.laufend = ui.runde;
+  Speicher.sichern();
+  zeige("spiel");
+  zeigeFrage();
+}
+
+function aktuelleTeile() { return teile(ui.runde.items[ui.runde.index]); }
+
+function zeigeFrage() {
+  clearTimeout(ui.timer);
+  stoppeMikro();
+  Stimme.still();
+  const r = ui.runde;
+  const t = aktuelleTeile();
+  const fach = FAECHER[t.e.fach];
+  ui.phase = "frage";
+  ui.rueck = null;
+
+  const w = Speicher.rec(r.items[r.index]);
+  const z = zustandRec(w);
+  const sw = $("statusWort");
+  sw.className = "status-wort " + z;
+  sw.textContent =
+    z === "hoelle" ? "🔥 Aus der Hölle – rette es!" :
+    z === "wackel" ? `🌀 Wackelkandidat – noch ${Math.max(1, noetig(w) - (w.n || 0))}× richtig bis in den Himmel` :
+    z === "neu" ? "✨ Neues Wort" :
+    istSchwierig(t.e, t.dir) ? "🧠 War schon schwierig – sitzt es noch?" : "☁️ Aus dem Himmel – sitzt es noch?";
+  $("richtungText").textContent = richtungsName(t.dir, t.e.fach);
+  $("frageText").textContent = zeigeAlt(t.frage);
+  $("frageText").lang = t.fremdIstFrage ? fach.sprache : "de";
+  $("frageLaut").hidden = !t.fremdIstFrage || !Stimme.kann();
+  $("frageLaut").classList.remove("spricht");
+
+  const schreiben = r.abfrage === "schreiben";
+  $("schreibForm").hidden = !schreiben;
+  $("muendlichBox").hidden = schreiben;
+  $("loesenBtn").parentElement.hidden = false;
+  $("loesung").hidden = true;
+  $("bewertung").hidden = true;
+  $("weiterZeile").hidden = true;
+  $("dochRichtigBtn").hidden = true;
+  $("mikroInfo").textContent = "";
+  $("mikroInfo").className = "mikro-info";
+
+  if (schreiben) {
+    const inp = $("eingabe");
+    inp.value = "";
+    inp.className = "eingabe";
+    inp.readOnly = false;
+    inp.lang = t.dir === "h" ? fach.sprache : "de";
+    inp.placeholder = t.dir === "h" ? `auf ${fach.name} …` : "auf Deutsch …";
+    $("schreibAktionen").hidden = false;
+    const ak = $("akzente");
+    ak.textContent = "";
+    if (t.dir === "h") for (const a of fach.akzente) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = a;
+      b.dataset.zeichen = a;
+      ak.appendChild(b);
+    }
+    ak.hidden = !ak.children.length;
+    inp.focus({ preventScroll: true });
+  } else {
+    $("mikroBtn").hidden = !Erkenner;
+    $("loesenBtn").focus({ preventScroll: true });
+  }
+  aktualisiereSpielstand();
+  if (ui.vorlesen && t.fremdIstFrage) setTimeout(() => sprichFrage(), 250);
+}
+
+function sprichFrage() {
+  const t = aktuelleTeile();
+  const b = $("frageLaut");
+  b.classList.add("spricht");
+  Stimme.sprich(t.frage.join(", "), FAECHER[t.e.fach].stimme).then(() => b.classList.remove("spricht"));
+}
+
+function aktualisiereSpielstand() {
+  const r = ui.runde;
+  $("balken").style.width = (100 * r.index / r.items.length) + "%";
+  $("zaehler").textContent = `${Math.min(r.index + 1, r.items.length)} / ${r.items.length}`;
+  $("standRichtig").textContent = r.richtig;
+  $("standFast").textContent = r.fast;
+  $("standFalsch").textContent = r.fehler.length - r.fast;
+  $("standSerie").textContent = r.serie;
+  $("standSterne").textContent = r.sterne;
+}
+
+/* Lösung anzeigen. art: "gut" | "fast" | "schlecht" | "" (mündlich, noch nicht bewertet) */
+function zeigeLoesung(t, art, titelText, grund, wohinText) {
+  const box = $("loesung");
+  box.textContent = "";
+  box.className = "loesung " + art;
+  if (titelText) {
+    const titel = document.createElement("div");
+    titel.className = "titel";
+    titel.textContent = titelText;
+    box.appendChild(titel);
+  }
+  const ziel = document.createElement("div");
+  ziel.className = "ziel";
+  const txt = document.createElement("span");
+  txt.textContent = zeigeAlt(t.ziel);
+  txt.lang = t.fremdIstFrage ? "de" : FAECHER[t.e.fach].sprache;
+  ziel.appendChild(txt);
+  if (!t.fremdIstFrage && Stimme.kann()) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "laut";
+    b.textContent = "🔊";
+    b.setAttribute("aria-label", "Vorsprechen");
+    b.addEventListener("click", () => {
+      b.classList.add("spricht");
+      Stimme.sprich(t.ziel.join(", "), t.zielStimme).then(() => b.classList.remove("spricht"));
+    });
+    ziel.appendChild(b);
+  }
+  box.appendChild(ziel);
+  if (grund) {
+    const g = document.createElement("div");
+    g.className = "grund";
+    g.textContent = grund;
+    box.appendChild(g);
+  }
+  if (t.e.notiz) {
+    const n = document.createElement("div");
+    n.className = "notiz";
+    n.textContent = "💡 " + t.e.notiz;
+    box.appendChild(n);
+  }
+  if (wohinText) {
+    const w = document.createElement("div");
+    w.className = "wohin";
+    w.textContent = wohinText;
+    box.appendChild(w);
+  }
+  box.hidden = false;
+}
+
+/* Spricht die fremde Lösung, wenn eingeschaltet. Gibt ein Versprechen zurück. */
+function sprichLoesung(t) {
+  if (!ui.vorlesen || t.fremdIstFrage) return Promise.resolve();
+  const b = $("loesung").querySelector(".laut");
+  if (b) b.classList.add("spricht");
+  return Stimme.sprich(t.ziel.join(", "), t.zielStimme).then(() => { if (b) b.classList.remove("spricht"); });
+}
+
+function wohinText(ergebnis, vorher, nachher, w) {
+  if (ergebnis === "f") return "Kommt in die Hölle 🔥 – du siehst es wieder.";
+  if (ergebnis === "a") return "Wird zum Wackelkandidaten 🌀 – kommt wieder.";
+  if (nachher === "himmel") return vorher === "hoelle" ? "Aus der Hölle gerettet – ab in den Himmel ☁️" : vorher === "wackel" ? "Nicht mehr wackelig – ab in den Himmel ☁️" : "Ab in den Himmel ☁️";
+  const rest = Math.max(1, noetig(w) - (w.n || 0));
+  return `Noch ${rest}× richtig, dann ist es im Himmel 🌀`;
+}
+
+/* Schreiben: Antwort prüfen. */
+function pruefeEingabe(weissNicht) {
+  if (ui.phase !== "frage") return;
+  ui.phase = "antwort";
+  const t = aktuelleTeile();
+  const eingabe = weissNicht ? "" : $("eingabe").value;
+  const p = pruefe(eingabe, t.ziel, t.zielSprache);
+  const a = werteAus(ui.runde, p.ergebnis, true);
+  ui.warteschlange.push(...a.belohnungen);
+  const inp = $("eingabe");
+  inp.className = "eingabe " + ({ r: "richtig", a: "fast", f: "falsch" })[p.ergebnis];
+  inp.readOnly = true;
+  $("akzente").hidden = true;
+  $("schreibAktionen").hidden = true;
+  const w = Speicher.rec(t.e.key + "#" + t.dir);
+  const wohin = wohinText(p.ergebnis, a.vorher, a.nachher, w);
+  aktualisiereSpielstand();
+
+  if (p.ergebnis === "r") {
+    zeigeLoesung(t, "gut", zufall(LOB) + " +" + a.neueSterne + " ⭐", "", wohin);
+    feiern(a.serieErreicht);
+    const warte = sprichLoesung(t);
+    if (!ui.warteschlange.length) {
+      Promise.all([warte, pause(a.serieErreicht ? 1600 : 1000)]).then(() => { if (ui.phase === "antwort" && $("overlay").hidden) weiter(); });
+    } else setTimeout(zeigeBelohnung, 700);
+    $("weiterZeile").hidden = false;
+  } else {
+    zeigeLoesung(t, p.ergebnis === "a" ? "fast" : "schlecht",
+      p.ergebnis === "a" ? "Fast! Richtig ist:" : weissNicht ? "Richtig ist:" : "Oh! Richtig ist:", p.grund, wohin);
+    sprichLoesung(t);
+    $("weiterZeile").hidden = false;
+    $("dochRichtigBtn").hidden = weissNicht || !eingabe.trim();
+    $("weiterBtn").focus({ preventScroll: true });
+    // Fokus im Eingabefeld lassen, damit Enter auf dem iPad weiterführt
+    inp.focus({ preventScroll: true });
+  }
+}
+
+const pause = ms => new Promise(r => setTimeout(r, ms));
+const zufall = liste => liste[Math.floor(Math.random() * liste.length)];
+
+/* Mündlich: Lösung zeigen, dann selbst bewerten. */
+function loesen(gehoert) {
+  if (ui.phase !== "frage") return;
+  ui.phase = "bewerten";
+  stoppeMikro();
+  const t = aktuelleTeile();
+  zeigeLoesung(t, "", "", "", "");
+  sprichLoesung(t);
+  $("muendlichBox").hidden = gehoert === undefined;
+  $("loesenBtn").parentElement.hidden = gehoert !== undefined;
+  $("bewertung").hidden = false;
+  $("bewertung").querySelector(".gewusst").focus({ preventScroll: true });
+}
+
+function bewerte(ergebnis, vomMikro) {
+  if (ui.phase !== "bewerten") return;
+  ui.phase = "antwort";
+  const t = aktuelleTeile();
+  const a = werteAus(ui.runde, ergebnis, false);
+  ui.warteschlange.push(...a.belohnungen);
+  $("bewertung").hidden = true;
+  $("muendlichBox").hidden = true;
+  $("loesenBtn").parentElement.hidden = false;
+  const w = Speicher.rec(t.e.key + "#" + t.dir);
+  const titel = ergebnis === "r" ? (vomMikro ? "🎤 " : "") + zufall(LOB) + " +" + a.neueSterne + " ⭐" : ergebnis === "a" ? "Fast – gut, dass du ehrlich bist!" : "Weiter üben – das schaffst du!";
+  zeigeLoesung(t, ergebnis === "r" ? "gut" : ergebnis === "a" ? "fast" : "schlecht", titel, "", wohinText(ergebnis, a.vorher, a.nachher, w));
+  aktualisiereSpielstand();
+  if (ergebnis === "r") feiern(a.serieErreicht);
+  const warte = vomMikro ? sprichLoesung(t) : Promise.resolve();
+  if (ui.warteschlange.length) { setTimeout(zeigeBelohnung, 600); return; }
+  Promise.all([warte, pause(ergebnis === "r" ? (a.serieErreicht ? 1500 : 900) : 1400)]).then(() => {
+    if (ui.phase === "antwort" && $("overlay").hidden) weiter();
+  });
+  $("weiterZeile").hidden = false;
+}
+
+/* Mikrofon (nur mündlich, nur wenn der Browser es kann). */
+function starteMikro() {
+  if (!Erkenner || ui.phase !== "frage") return;
+  const t = aktuelleTeile();
+  Stimme.still();
+  stoppeMikro();
+  let rec;
+  try { rec = new Erkenner(); } catch (e) { $("mikroInfo").textContent = "Das Mikrofon geht hier leider nicht."; return; }
+  ui.erkennung = rec;
+  rec.lang = t.zielStimme;
+  rec.interimResults = false;
+  rec.maxAlternatives = 5;
+  rec.continuous = false;
+  const info = $("mikroInfo");
+  info.className = "mikro-info hoert";
+  info.textContent = "🎤 Ich höre zu …";
+  let fertig = false;
+  rec.onresult = ev => {
+    fertig = true;
+    const alt = [...ev.results[0]].map(x => x.transcript);
+    info.className = "mikro-info";
+    const passt = alt.some(x => passtGesprochen(x, t.ziel, t.zielSprache));
+    if (passt) {
+      info.textContent = `Verstanden: «${alt.find(x => passtGesprochen(x, t.ziel, t.zielSprache))}»`;
+      loesen(true);
+      bewerte("r", true);
+    } else {
+      loesen(true);
+      info.textContent = `Ich habe «${alt[0] || "…"}» verstanden. Stimmt es trotzdem? Bewerte selbst.`;
+      $("muendlichBox").hidden = false;
+    }
+  };
+  rec.onerror = ev => {
+    fertig = true;
+    info.className = "mikro-info";
+    info.textContent = ev.error === "not-allowed" || ev.error === "service-not-allowed"
+      ? "Das Mikrofon ist nicht erlaubt. Sag es einfach laut und tippe auf «Lösung zeigen»."
+      : ev.error === "no-speech" ? "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»." : "Das hat nicht geklappt. Nochmals versuchen?";
+  };
+  rec.onend = () => {
+    ui.erkennung = null;
+    if (!fertig && ui.phase === "frage") { info.className = "mikro-info"; info.textContent = "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»."; }
+  };
+  try { rec.start(); } catch (e) { info.className = "mikro-info"; info.textContent = "Das Mikrofon geht hier leider nicht."; }
+}
+function stoppeMikro() {
+  if (ui.erkennung) { try { ui.erkennung.abort(); } catch (e) { /* egal */ } ui.erkennung = null; }
+}
+
+function weiter() {
+  clearTimeout(ui.timer);
+  if (ui.phase !== "antwort" || !$("overlay").hidden) return;
+  if (ui.runde.index < ui.runde.items.length) zeigeFrage();
+  else zeigeEnde();
+}
+
+$("schreibForm").addEventListener("submit", ev => {
+  ev.preventDefault();
+  if (ui.phase === "frage") pruefeEingabe(false);
+  else if (ui.phase === "antwort") weiter();
+});
+$("weissNichtBtn").addEventListener("click", () => pruefeEingabe(true));
+$("akzente").addEventListener("pointerdown", ev => { if (ev.target.closest("button")) ev.preventDefault(); });
+$("akzente").addEventListener("click", ev => {
+  const b = ev.target.closest("button");
+  if (!b || ui.phase !== "frage") return;
+  const inp = $("eingabe");
+  const s = inp.selectionStart ?? inp.value.length, e = inp.selectionEnd ?? inp.value.length;
+  inp.setRangeText(b.dataset.zeichen, s, e, "end");
+  inp.focus({ preventScroll: true });
+});
+$("loesenBtn").addEventListener("click", () => loesen());
+$("mikroBtn").addEventListener("click", starteMikro);
+$("bewertung").addEventListener("click", ev => {
+  const b = ev.target.closest(".bew");
+  if (b) bewerte(b.dataset.bew, false);
+});
+$("weiterBtn").addEventListener("click", weiter);
+$("frageLaut").addEventListener("click", sprichFrage);
+$("dochRichtigBtn").addEventListener("click", () => {
+  if (ui.phase !== "antwort" || !ui.rueck) return;
+  // Belohnungen der verworfenen Antwort entfernen (es gab bei falsch/fast keine)
+  const a = nimmZurueck();
+  ui.warteschlange.push(...a.belohnungen);
+  $("eingabe").className = "eingabe richtig";
+  const w = Speicher.rec(a.t.e.key + "#" + a.t.dir);
+  zeigeLoesung(a.t, "gut", "Alles klar, zählt als richtig! +" + a.neueSterne + " ⭐", "", wohinText("r", a.vorher, a.nachher, w));
+  $("dochRichtigBtn").hidden = true;
+  aktualisiereSpielstand();
+  feiern(a.serieErreicht);
+  if (ui.warteschlange.length) setTimeout(zeigeBelohnung, 600);
+  else setTimeout(() => { if (ui.phase === "antwort" && $("overlay").hidden) weiter(); }, 1100);
+});
+
+document.addEventListener("keydown", ev => {
+  if (!$("unitOverlay").hidden || !$("loginOverlay").hidden) return;
+  if (!$("overlay").hidden) {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); $("ovBtn").click(); }
+    return;
+  }
+  if ($("spiel").hidden) return;
+  const imFeld = ev.target === $("eingabe");
+  if (imFeld) return;   // Schreiben läuft über das Formular
+  if (ui.phase === "frage" && ui.runde.abfrage === "muendlich") {
+    if (ev.key === " " || ev.key === "Enter") { ev.preventDefault(); loesen(); }
+  } else if (ui.phase === "bewerten") {
+    const m = { "1": "r", "2": "a", "3": "f", "ArrowLeft": "r", "ArrowDown": "a", "ArrowRight": "f" }[ev.key];
+    if (m) { ev.preventDefault(); bewerte(m, false); }
+  } else if (ui.phase === "antwort" && (ev.key === "Enter" || ev.key === " ")) {
+    ev.preventDefault();
+    weiter();
+  }
+});
+
+$("pauseBtn").addEventListener("click", () => {
+  clearTimeout(ui.timer);
+  stoppeMikro();
+  Stimme.still();
+  if (ui.phase === "antwort" && ui.runde.index >= ui.runde.items.length) { zeigeEnde(); return; }
+  if (ui.phase === "bewerten") ui.phase = "frage";   // unbewertet: kommt beim Weiterspielen nochmals
+  baueStart();
+  zeige("start");
+});
+
+/* ---------- Belohnungen ---------- */
+function feiern(serie) {
+  sterne(serie ? 16 : 6);
+  if (serie) zeigeLob();
+}
+
+function sterne(anzahl) {
+  const karte = $("karte");
+  const ziel = $("loesung").getBoundingClientRect();
+  const basis = karte.getBoundingClientRect();
+  const cx = ziel.left - basis.left + ziel.width / 2;
+  const cy = ziel.top - basis.top + 40;
+  const zeichen = ["★", "✦", "✧", "★"];
+  for (let i = 0; i < anzahl; i++) {
+    const s = document.createElement("span");
+    s.className = "stern";
+    s.textContent = zeichen[i % zeichen.length];
+    const winkel = (Math.PI * 2 * i) / anzahl + Math.random() * 0.6;
+    const weite = 70 + Math.random() * (anzahl > 8 ? 150 : 70);
+    s.style.left = cx + "px";
+    s.style.top = cy + "px";
+    s.style.setProperty("--dx", Math.cos(winkel) * weite + "px");
+    s.style.setProperty("--dy", Math.sin(winkel) * weite * 0.7 + "px");
+    s.style.fontSize = (18 + Math.random() * 14) + "px";
+    karte.appendChild(s);
+    setTimeout(() => s.remove(), 1100);
+  }
+}
+
+function zeigeLob() {
+  const l = document.createElement("div");
+  l.className = "lob";
+  l.textContent = "🌟 " + zufall(SERIEN_LOB) + " +3 ⭐";
+  $("karte").appendChild(l);
+  setTimeout(() => l.remove(), 2500);
+}
+
+function zeigeBelohnung() {
+  const b = ui.warteschlange.shift();
+  if (!b) return;
+  $("ovIcon").textContent = b.icon;
+  $("ovTitel").textContent = b.titel;
+  $("ovText").textContent = b.text;
+  $("overlay").hidden = false;
+  $("ovBtn").focus({ preventScroll: true });
+}
+$("ovBtn").addEventListener("click", () => {
+  $("overlay").hidden = true;
+  if (ui.warteschlange.length) { zeigeBelohnung(); return; }
+  if (!$("spiel").hidden) weiter();
+});
+
+/* ---------- Ende ---------- */
+function zeigeEnde() {
+  const r = ui.runde;
+  Stimme.still();
+  Speicher.daten.laufend = null;
+  Speicher.sichern();
+  Online.abgleichen();
+  zeige("ende");
+  const n = r.items.length;
+  const quote = n ? r.richtig / n : 0;
+  const spielname = Online.angemeldet() && Online.z.anzeige ? ", " + Online.z.anzeige : "";
+  $("endeTitel").textContent = quote === 1 ? `Parfait${spielname}! 🎉` : "Runde fertig!";
+  $("endePunkte").innerHTML = `${r.richtig} <small>von ${n} richtig</small>`;
+  $("endeSatz").textContent =
+    (quote === 1 ? "Alles gewusst – bravo! " :
+     quote >= 0.8 ? "Sehr gut gemacht! " :
+     quote >= 0.5 ? "Gut! Die wackeligen holen wir noch in den Himmel. " :
+                    "Das war schwierig – übe die Fehler gleich nochmals. ") + `+${r.sterne} ⭐`;
+
+  const fach = r.fach;
+  const li = levelInfo(fach);
+  const st = statistik(eintraegeVon(unitsVon(fach).map(u => u.id)), r.richtung);
+  const el = $("endeLevel");
+  el.innerHTML = `<div class="level-kopf"><div class="level-icon"></div><div><div class="level-name"></div><div class="level-naechst"></div></div>
+    <div class="level-sterne">${li.sterne} ⭐<small>Sterne</small></div></div>
+    <div class="vierbalken"><div class="h"></div><div class="w"></div><div class="l"></div></div>
+    <div class="legende">${legendeHtml(st)}</div>`;
+  el.querySelector(".level-icon").textContent = li.icon;
+  el.querySelector(".level-name").textContent = `${FAECHER[fach].flagge} ${li.name}`;
+  el.querySelector(".level-naechst").textContent = li.naechst;
+  setzeBalken(el.querySelector(".vierbalken"), st);
+
+  const liste = $("endeFehler");
+  liste.textContent = "";
+  $("endeFehlerBlock").hidden = r.fehler.length === 0;
+  $("fehlerBtn").hidden = r.fehler.length === 0;
+  for (const item of r.fehler) {
+    if (!KATALOG.eintrag[item.split("#")[0]]) continue;
+    const t = teile(item);
+    const li2 = document.createElement("li");
+    if (Speicher.rec(item) && Speicher.rec(item).l === "a") li2.className = "wackel";
+    const frage = document.createElement("span");
+    frage.textContent = zeigeAlt(t.frage) + " → ";
+    const b = document.createElement("b");
+    b.textContent = zeigeAlt(t.ziel);
+    const klein = document.createElement("small");
+    klein.textContent = Speicher.rec(item) && Speicher.rec(item).l === "a" ? "🌀 fast" : "🔥 falsch";
+    li2.append(frage, b, klein);
+    liste.appendChild(li2);
+  }
+  if (ui.warteschlange.length) zeigeBelohnung();
+}
+
+$("fehlerBtn").addEventListener("click", () => {
+  const items = ui.runde.fehler.filter(k => KATALOG.eintrag[k.split("#")[0]]);
+  if (!items.length) return;
+  const r = ui.runde;
+  ui.runde = neueRunde(mische([...new Set(items)]), { fach: r.fach, abfrage: r.abfrage, richtung: r.richtung });
+  Speicher.daten.laufend = ui.runde;
+  Speicher.sichern();
+  zeige("spiel");
+  zeigeFrage();
+});
+$("nochmalsBtn").addEventListener("click", () => {
+  if (!starteMitEinstellung()) { baueStart(); zeige("start"); }
+});
+$("startBtn").addEventListener("click", () => { baueStart(); zeige("start"); });
+
+/* ---------- Wörterliste ---------- */
+const ZEICHEN = { himmel: "☁️", wackel: "🌀", hoelle: "🔥", neu: "✨" };
+
+function baueListe() {
+  const fach = FAECHER[ui.fach];
+  $("listeTitel").textContent = `${fach.flagge} Wörter ${fach.name}`;
+  $("listeSprache").textContent = fach.name;
+  for (const b of $("listeFilter").querySelectorAll(".chip")) b.setAttribute("aria-pressed", String(b.dataset.filter === ui.listeFilter));
+  const box = $("listeInhalt");
+  box.textContent = "";
+  const gewaehlt = ui.auswahl[ui.fach];
+  const units = unitsVon(ui.fach).filter(u => !gewaehlt.size || gewaehlt.has(u.id));
+  for (const u of units) {
+    const block = document.createElement("div");
+    block.className = "unit-block";
+    const kopf = document.createElement("div");
+    kopf.className = "unit-titel";
+    const name = document.createElement("b");
+    name.textContent = (medailleVon(u.id) ? medailleVon(u.id) + " " : "") + u.name;
+    kopf.appendChild(name);
+    if (u.eigen) {
+      const bearb = document.createElement("button");
+      bearb.type = "button";
+      bearb.className = "btn zweit klein";
+      bearb.textContent = "✏️ Bearbeiten";
+      bearb.addEventListener("click", () => oeffneUnit(u.id));
+      kopf.appendChild(bearb);
+    }
+    block.appendChild(kopf);
+    const tab = document.createElement("div");
+    tab.className = "tabelle";
+    const passt = e => {
+      const h = zustandDir(e, "h"), z = zustandDir(e, "z");
+      if (ui.listeFilter === "hoelle") return h === "hoelle" || z === "hoelle";
+      if (ui.listeFilter === "wackel") return h === "wackel" || z === "wackel";
+      if (ui.listeFilter === "schwierig") return istSchwierig(e, "m");
+      return true;
+    };
+    let liste = u.eintraege.filter(passt);
+    if (ui.listeFilter === "schwierig") liste = liste.slice().sort((a, b) => falschZahl(b, "m") - falschZahl(a, "m"));
+    for (const e of liste) {
+      const z = document.createElement("div");
+      z.className = "zeile";
+      const de = document.createElement("span");
+      de.textContent = zeigeAlt(e.de);
+      const fr = document.createElement("span");
+      fr.className = "fremd";
+      const ft = document.createElement("span");
+      ft.textContent = zeigeAlt(e.fremd);
+      ft.lang = fach.sprache;
+      fr.appendChild(ft);
+      if (Stimme.kann()) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "laut";
+        b.textContent = "🔊";
+        b.setAttribute("aria-label", "Vorsprechen");
+        b.addEventListener("click", () => {
+          b.classList.add("spricht");
+          Stimme.sprich(e.fremd.join(", "), fach.stimme).then(() => b.classList.remove("spricht"));
+        });
+        fr.appendChild(b);
+      }
+      const st = document.createElement("span");
+      st.className = "stand";
+      st.append(`→ ${ZEICHEN[zustandDir(e, "h")]}  ← ${ZEICHEN[zustandDir(e, "z")]}`);
+      const fz = falschZahl(e, "m");
+      if (fz) {
+        const x = document.createElement("span");
+        x.className = "x";
+        x.textContent = `  ${fz}✗`;
+        st.appendChild(x);
+      }
+      z.append(de, fr, st);
+      tab.appendChild(z);
+    }
+    if (!liste.length) {
+      const leer = document.createElement("div");
+      leer.className = "leer-hinweis";
+      leer.textContent = ui.listeFilter === "alle" ? "Noch keine Wörter." : "Keine Wörter in dieser Auswahl. 🎉";
+      tab.appendChild(leer);
+    }
+    block.appendChild(tab);
+    box.appendChild(block);
+  }
+}
+$("listeFilter").addEventListener("click", ev => {
+  const b = ev.target.closest(".chip");
+  if (b) { ui.listeFilter = b.dataset.filter; baueListe(); }
+});
+$("listeZurueck").addEventListener("click", () => { baueStart(); zeige("start"); });
+
+/* ---------- Eigene Unit ---------- */
+const unitDialog = { id: null, linksFremd: false, linksGesetzt: false };
+
+/* Erste Spalte erraten: stehen links deutsche Artikel, ist links Deutsch. */
+function rateLinksFremd(text, fach) {
+  let de = 0, fremd = 0;
+  for (const zeile of text.split(/\r?\n/)) {
+    const p = parseZeile(zeile, false);
+    if (!p || p.fehler) continue;
+    const l = norm(p.de[0]), r = norm(p.fremd[0]);
+    if (ARTIKEL.de.test(l)) de++;
+    if (ARTIKEL.de.test(r)) fremd++;
+    if (ARTIKEL[FAECHER[fach].sprache].test(l)) fremd++;
+    if (ARTIKEL[FAECHER[fach].sprache].test(r)) de++;
+  }
+  return fremd > de;
+}
+
+function oeffneUnit(id) {
+  const fach = id ? Speicher.daten.eigene[id].fach : ui.fach;
+  unitDialog.id = id;
+  unitDialog.fach = fach;
+  unitDialog.linksFremd = false;
+  unitDialog.linksGesetzt = Boolean(id);
+  const f = FAECHER[fach];
+  $("unitTitel").textContent = id ? `${f.flagge} Unit bearbeiten` : `${f.flagge} Eigene Unit ${f.name}`;
+  $("unitName").value = id ? Speicher.daten.eigene[id].name : "";
+  $("unitText").value = id ? Speicher.daten.eigene[id].woerter.trim() : "";
+  $("unitText").placeholder = fach === "fr" ? "la maison = das Haus\nle chat = die Katze\nbeau; joli = schön" : "house = das Haus\ncat = die Katze\nto run = rennen";
+  $("unitHilfe").textContent =
+    "Eine Zeile pro Wort, getrennt mit = oder – oder Tabulator. Mehrere Lösungen mit ; trennen, (Klammern) sind freiwillig, " +
+    "nach « # » darf eine Notiz stehen. Tipp iPad: Foto der Wörterliste öffnen, Text gedrückt halten, alles markieren, kopieren und hier einfügen.";
+  $("unitLinksFremd").textContent = f.name;
+  $("unitLoeschen").hidden = !id;
+  $("unitFehler").textContent = "";
+  aktualisiereUnitVorschau();
+  $("unitOverlay").hidden = false;
+  $("unitOverlay").scrollTop = 0;
+  (id ? $("unitText") : $("unitName")).focus();
+}
+
+function unitAusText() {
+  const text = $("unitText").value;
+  if (!unitDialog.linksGesetzt) unitDialog.linksFremd = rateLinksFremd(text, unitDialog.fach);
+  const p = parseUnit({ fach: unitDialog.fach, id: "vorschau", name: "Zeile", woerter: text }, unitDialog.linksFremd);
+  return p;
+}
+
+function aktualisiereUnitVorschau() {
+  const p = unitAusText();
+  for (const b of $("unitLinks").querySelectorAll(".chip")) b.setAttribute("aria-pressed", String((b.dataset.links === "fremd") === unitDialog.linksFremd));
+  const v = $("unitVorschau");
+  v.textContent = "";
+  const kopf = document.createElement("b");
+  kopf.textContent = p.eintraege.length ? `${p.eintraege.length} ${p.eintraege.length === 1 ? "Wort" : "Wörter"} erkannt` : "Noch keine Wörter erkannt";
+  v.appendChild(kopf);
+  const ul = document.createElement("ul");
+  for (const e of p.eintraege.slice(0, 4)) {
+    const li = document.createElement("li");
+    li.textContent = `${zeigeAlt(e.de)}  =  ${zeigeAlt(e.fremd)}`;
+    ul.appendChild(li);
+  }
+  if (p.eintraege.length > 4) { const li = document.createElement("li"); li.textContent = "…"; ul.appendChild(li); }
+  for (const f of p.fehler.slice(0, 5)) {
+    const li = document.createElement("li");
+    li.className = "bad";
+    li.textContent = f.replace(/^Zeile, /, "");
+    ul.appendChild(li);
+  }
+  if (ul.children.length) v.appendChild(ul);
+}
+
+$("unitText").addEventListener("input", aktualisiereUnitVorschau);
+$("unitLinks").addEventListener("click", ev => {
+  const b = ev.target.closest(".chip");
+  if (!b) return;
+  unitDialog.linksFremd = b.dataset.links === "fremd";
+  unitDialog.linksGesetzt = true;
+  aktualisiereUnitVorschau();
+});
+$("unitAbbrechen").addEventListener("click", () => { $("unitOverlay").hidden = true; });
+$("unitForm").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const name = $("unitName").value.trim();
+  const p = unitAusText();
+  if (!name) { $("unitFehler").textContent = "Bitte einen Namen für die Unit eingeben."; $("unitName").focus(); return; }
+  if (!p.eintraege.length) { $("unitFehler").textContent = "Es wurden noch keine Wörter erkannt."; $("unitText").focus(); return; }
+  if (p.fehler.length && !window.confirm(`${p.fehler.length} ${p.fehler.length === 1 ? "Zeile wird" : "Zeilen werden"} übersprungen. Trotzdem speichern?`)) return;
+  // Einheitlich als «deutsch = fremd # notiz» speichern
+  const text = p.eintraege.map(e => `${e.de.join("; ")} = ${e.fremd.join("; ")}${e.notiz ? " # " + e.notiz : ""}`).join("\n");
+  const id = unitDialog.id || "eigen-" + Math.random().toString(36).slice(2, 8) + Date.now().toString(36);
+  const alt = Speicher.daten.eigene[id];
+  Speicher.daten.eigene[id] = { fach: unitDialog.fach, name, woerter: text, t: Date.now(), erstellt: alt ? alt.erstellt : Date.now() };
+  Speicher.sichern();
+  Online.markiere();
+  Online.abgleichen();
+  baueKatalog();
+  ui.fach = unitDialog.fach;
+  ui.auswahl[ui.fach].add(id);
+  einstellungMerken();
+  $("unitOverlay").hidden = true;
+  if (!$("liste").hidden) baueListe(); else baueStart();
+});
+$("unitLoeschen").addEventListener("click", () => {
+  const id = unitDialog.id;
+  if (!id) return;
+  if (!window.confirm(`Die Unit «${Speicher.daten.eigene[id].name}» löschen? Die Wörter und ihr Lernstand sind dann weg.`)) return;
+  Speicher.daten.eigene[id] = { fach: Speicher.daten.eigene[id].fach, weg: true, t: Date.now(), name: "", woerter: "" };
+  ui.auswahl[unitDialog.fach].delete(id);
+  Speicher.zuruecksetzen([id]);
+  baueKatalog();
+  einstellungMerken();
+  $("unitOverlay").hidden = true;
+  if (!$("liste").hidden) baueListe(); else baueStart();
+});
+
+/* ---------- Start der App ---------- */
+Speicher.laden();
+Online.laden();
+Stimme.init();
+baueKatalog();
+{
+  const s = Speicher.daten.einstellung || {};
+  if (FAECHER[s.fach]) ui.fach = s.fach;
+  if (["h", "z", "m"].includes(s.richtung)) ui.richtung = s.richtung;
+  if (["schreiben", "muendlich"].includes(s.abfrage)) ui.abfrage = s.abfrage;
+  if (["offen", "fehler", "schwierig", "alle"].includes(s.modus)) ui.modus = s.modus;
+  if (RUNDEN_LAENGEN.includes(s.laenge)) ui.laenge = s.laenge;
+  if (typeof s.vorlesen === "boolean") ui.vorlesen = s.vorlesen;
+  if (typeof s.langsam === "boolean") ui.langsam = s.langsam;
+  for (const f of Object.keys(FAECHER)) {
+    for (const id of (s.auswahl && s.auswahl[f]) || []) if (KATALOG.unit[id]) ui.auswahl[f].add(id);
+    if (!s.auswahl) unitsVon(f).forEach(u => ui.auswahl[f].add(u.id));
+  }
+}
+if (KATALOG.fehler.length) console.error("Datenfehler:", KATALOG.fehler);
+baueStart();
+Online.abgleichen();
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") { if (Online.z.offen) Online.abgleichen(true); }
+  else Online.abgleichen();
+});
+window.addEventListener("online", () => Online.abgleichen());
+
+/* Für Tests in der Konsole */
+window.__lernapp = { FAECHER, UNITS, KONTROLLE, KATALOG: () => KATALOG, parseZeile, parseUnit, pruefe, passtGesprochen, norm,
+  varianten, zustandRec, noetig, ziehe, poolFuer, statistik, ui, Speicher, Online, ONLINE_KONFIG, zusammenfuehren, kanon,
+  tageInFolge, rateLinksFremd };
+</script>
+</body>
+</html>
