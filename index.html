@@ -3,11 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="color-scheme" content="light">
+<meta name="color-scheme" content="light dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Wörter-Reise">
 <meta name="theme-color" content="#fbf8f3">
+<script>
+  /* Hell/Dunkel vor dem ersten Zeichnen setzen (kein Aufblitzen). Wahl je Gerät, sonst wie das System. */
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("woerter-reise-thema"); } catch (e) { /* ohne Speicher */ }
+    if (t !== "hell" && t !== "dunkel") t = (window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches) ? "dunkel" : "hell";
+    document.documentElement.setAttribute("data-thema", t);
+  })();
+</script>
 <meta name="robots" content="noindex, nofollow">
 <title>Wörter-Reise</title>
 <!--
@@ -50,9 +59,63 @@
     --wackel-soft: #f1eafd;
     --neu: #e3ddd2;
     --gold: #f0b429;
+    --gelb-soft: #fff7e0;
+    --gelb-line: #f5e2a8;
+    --feld: #ffffff;
+    --lila-ink: #7a55c4;
+    --notiz-ink: #7a5d00;
+    --leer-ink: #a8a196;
+    --bew-gut: #bfe5d0;
+    --bew-fast: #dccff6;
+    --bew-nicht: #f4c9c5;
+    --online-line: #cfe0fb;
+    --overlay: rgba(40, 46, 60, .45);
+    --schatten: rgba(60, 50, 30, .05);
+    --knopf: #ffffff;
+    --accent-ink: #ffffff;
+    color-scheme: light;
     --radius: 18px;
     --wort: clamp(32px, 7vw, 54px);
   }
+  /* Dunkler Modus (Schalter oben rechts, sonst wie das System) */
+  :root[data-thema="dunkel"] {
+    --bg: #141922;
+    --card: #1e2531;
+    --ink: #e8ecf3;
+    --muted: #a0aab8;
+    --line: #313a48;
+    --accent: #6f9ff0;
+    --accent-soft: #233351;
+    --good: #3fb07c;
+    --good-soft: #1b3428;
+    --bad: #e8716b;
+    --bad-soft: #3d2426;
+    --himmel: #74b0f2;
+    --hoelle: #f28d63;
+    --wackel: #b99cf2;
+    --wackel-soft: #2c2643;
+    --neu: #3b4452;
+    --gold: #f0b429;
+    --gelb-soft: #3a321b;
+    --gelb-line: #5c4b1d;
+    --feld: #161c26;
+    --lila-ink: #c6acf7;
+    --notiz-ink: #f2d47c;
+    --leer-ink: #7f8796;
+    --bew-gut: #2e5a45;
+    --bew-fast: #4a3d70;
+    --bew-nicht: #6b3634;
+    --online-line: #30497a;
+    --overlay: rgba(0, 0, 0, .6);
+    --schatten: rgba(0, 0, 0, .35);
+    --knopf: #e8ecf3;
+    --accent-ink: #0e1628;
+    color-scheme: dark;
+  }
+  .kopfzeile { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .thema-btn { flex: none; border: 2px solid var(--line); background: var(--card); color: var(--ink); border-radius: 99px;
+    padding: 6px 14px; min-height: 44px; font-size: 16px; font-weight: 700; cursor: pointer; }
+  .thema-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; }
   body {
@@ -101,10 +164,10 @@
   .legende b { color: var(--ink); }
   .punkt { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
   .tageszeile { display: flex; gap: 8px 16px; flex-wrap: wrap; font-size: 15px; margin-top: 10px; }
-  .tageszeile span { background: #fff7e0; border-radius: 99px; padding: 2px 10px; }
+  .tageszeile span { background: var(--gelb-soft); border-radius: 99px; padding: 2px 10px; }
   .medaillen { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
-  .medaille { font-size: 13px; background: #fff7e0; border-radius: 99px; padding: 3px 10px; border: 1px solid #f5e2a8; }
-  .medaille.leer { background: transparent; border: 1px dashed var(--line); color: #a8a196; }
+  .medaille { font-size: 13px; background: var(--gelb-soft); border-radius: 99px; padding: 3px 10px; border: 1px solid var(--gelb-line); }
+  .medaille.leer { background: transparent; border: 1px dashed var(--line); color: var(--leer-ink); }
 
   .weiterspielen {
     margin-top: 14px; display: flex; align-items: center; gap: 14px; background: var(--accent-soft);
@@ -140,7 +203,7 @@
   .schalter { display: flex; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; font-size: 17px; }
   .schalter input { position: absolute; opacity: 0; width: 1px; height: 1px; }
   .schalter .bahn { width: 50px; height: 30px; border-radius: 99px; background: var(--neu); position: relative; flex: none; transition: background .2s; }
-  .schalter .bahn::after { content: ""; position: absolute; left: 3px; top: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .2s; }
+  .schalter .bahn::after { content: ""; position: absolute; left: 3px; top: 3px; width: 24px; height: 24px; border-radius: 50%; background: var(--knopf); box-shadow: 0 1px 3px rgba(0,0,0,.2); transition: transform .2s; }
   .schalter input:checked + .bahn { background: var(--good); }
   .schalter input:checked + .bahn::after { transform: translateX(20px); }
   .schalter input:focus-visible + .bahn { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -149,7 +212,7 @@
 
   .btn {
     appearance: none; border: 0; border-radius: 14px; cursor: pointer; font-weight: 800;
-    padding: 14px 26px; font-size: 20px; background: var(--accent); color: #fff;
+    padding: 14px 26px; font-size: 20px; background: var(--accent); color: var(--accent-ink);
     transition: transform .1s, opacity .15s;
   }
   .btn:active { transform: scale(.97); }
@@ -173,12 +236,12 @@
 
   .karte {
     position: relative; margin-top: 16px; background: var(--card); border-radius: var(--radius);
-    padding: 28px 18px 24px; text-align: center; box-shadow: 0 2px 0 var(--line), 0 10px 30px rgba(60, 50, 30, .05);
+    padding: 28px 18px 24px; text-align: center; box-shadow: 0 2px 0 var(--line), 0 10px 30px var(--schatten);
     min-height: 440px; overflow: hidden;
   }
   .status-wort { font-size: 14px; font-weight: 700; min-height: 20px; margin-bottom: 2px; }
   .status-wort.hoelle { color: var(--hoelle); }
-  .status-wort.wackel { color: #7a55c4; }
+  .status-wort.wackel { color: var(--lila-ink); }
   .status-wort.neu { color: var(--muted); }
   .richtung { font-size: 15px; color: var(--muted); margin-bottom: 12px; }
   .frage { font-size: var(--wort); font-weight: 700; line-height: 1.2; word-break: break-word; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
@@ -192,7 +255,7 @@
   .schreiben { margin-top: 22px; }
   .eingabe {
     width: 100%; max-width: 520px; font: inherit; font-size: 28px; padding: 12px 14px; border-radius: 14px; text-align: center;
-    border: 3px solid var(--line); background: #fff; color: var(--ink); outline: none;
+    border: 3px solid var(--line); background: var(--feld); color: var(--ink); outline: none;
   }
   .eingabe:focus { border-color: var(--accent); }
   .eingabe.richtig { border-color: var(--good); background: var(--good-soft); }
@@ -209,11 +272,11 @@
   .loesung { margin-top: 20px; }
   .loesung .titel { font-weight: 800; font-size: 24px; }
   .loesung.gut .titel { color: var(--good); }
-  .loesung.fast .titel { color: #7a55c4; }
+  .loesung.fast .titel { color: var(--lila-ink); }
   .loesung.schlecht .titel { color: var(--bad); }
   .loesung .ziel { font-size: clamp(28px, 6vw, 42px); font-weight: 700; color: var(--good); display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
-  .loesung .grund { font-size: 16px; color: #7a55c4; margin-top: 2px; }
-  .loesung .notiz { display: inline-block; font-size: 15px; color: #7a5d00; background: #fff7e0; border-radius: 10px; padding: 4px 12px; margin-top: 8px; }
+  .loesung .grund { font-size: 16px; color: var(--lila-ink); margin-top: 2px; }
+  .loesung .notiz { display: inline-block; font-size: 15px; color: var(--notiz-ink); background: var(--gelb-soft); border-radius: 10px; padding: 4px 12px; margin-top: 8px; }
   .loesung .wohin { font-size: 14px; color: var(--muted); margin-top: 6px; }
   .mikro-info { font-size: 15px; color: var(--muted); min-height: 22px; margin-top: 10px; }
   .mikro-info.hoert { color: var(--accent); font-weight: 700; }
@@ -226,14 +289,14 @@
   .bew:active { transform: translateY(3px); box-shadow: 0 1px 0 var(--line); }
   .bew .icon { display: block; font-size: 30px; line-height: 1.1; }
   .bew .taste { display: block; font-size: 12px; font-weight: 600; color: var(--muted); }
-  .bew.gewusst { border-color: #bfe5d0; }
-  .bew.fast { border-color: #dccff6; }
-  .bew.nicht { border-color: #f4c9c5; }
+  .bew.gewusst { border-color: var(--bew-gut); }
+  .bew.fast { border-color: var(--bew-fast); }
+  .bew.nicht { border-color: var(--bew-nicht); }
   @media (hover: none) and (pointer: coarse) { .bew .taste, .kbd { display: none; } }
 
   .weiter-zeile { margin-top: 16px; display: flex; gap: 12px; justify-content: center; align-items: center; flex-wrap: wrap; }
   .kbd { font-size: 14px; color: var(--muted); }
-  .kbd kbd { font: inherit; border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 6px; padding: 1px 7px; background: #fff; }
+  .kbd kbd { font: inherit; border: 1px solid var(--line); border-bottom-width: 3px; border-radius: 6px; padding: 1px 7px; background: var(--feld); }
 
   .lob {
     position: absolute; left: 50%; top: 10px; transform: translateX(-50%);
@@ -259,13 +322,13 @@
     margin-top: 14px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
     background: var(--card); border: 2px dashed var(--line); border-radius: var(--radius); padding: 12px 16px;
   }
-  .online.an { border-style: solid; border-color: #cfe0fb; }
+  .online.an { border-style: solid; border-color: var(--online-line); }
   .online .txt { flex: 1; min-width: 200px; font-size: 15px; color: var(--muted); }
   .online .txt b { color: var(--ink); }
 
   /* ---------- Overlays ---------- */
   .overlay {
-    position: fixed; inset: 0; background: rgba(40, 46, 60, .45); display: flex; align-items: center; justify-content: center;
+    position: fixed; inset: 0; background: var(--overlay); display: flex; align-items: center; justify-content: center;
     padding: 16px; z-index: 10; animation: einblenden .25s ease; overflow-y: auto;
   }
   .overlay .box {
@@ -283,7 +346,7 @@
   .formular label { display: block; font-weight: 700; font-size: 15px; margin: 12px 0 4px; }
   .formular input, .formular textarea {
     width: 100%; font: inherit; font-size: 20px; padding: 10px 12px; border-radius: 12px;
-    border: 2px solid var(--line); background: #fff; color: var(--ink); outline: none;
+    border: 2px solid var(--line); background: var(--feld); color: var(--ink); outline: none;
   }
   .formular textarea { font-size: 16px; min-height: 200px; resize: vertical; line-height: 1.4; }
   .formular input:focus, .formular textarea:focus { border-color: var(--accent); }
@@ -341,7 +404,10 @@
 
   <!-- ======================= START ======================= -->
   <section id="start">
-    <h1 id="gruss">Hallo! 👋</h1>
+    <div class="kopfzeile">
+      <h1 id="gruss">Hallo! 👋</h1>
+      <button type="button" class="thema-btn" id="themaBtn" aria-label="Dunkler Modus">🌙 Dunkel</button>
+    </div>
     <p class="sub">Bring die Wörter in den Himmel ☁️. Falsche landen in der Hölle 🔥, wackelige bleiben Wackelkandidaten 🌀, bis sie sicher sitzen.</p>
     <div id="datenWarnung" class="warnung" hidden></div>
 
@@ -1691,6 +1757,35 @@ const ui = {
   erkennung: null,
 };
 
+/* Hell/Dunkel: Wahl je Gerät (eigener Schlüssel, wird nicht online abgeglichen). */
+const Thema = {
+  KEY: "woerter-reise-thema",
+  jetzt() { return document.documentElement.getAttribute("data-thema") === "dunkel" ? "dunkel" : "hell"; },
+  setze(t, merken) {
+    document.documentElement.setAttribute("data-thema", t);
+    if (merken) { try { window.localStorage.setItem(this.KEY, t); } catch (e) { /* ohne Speicher */ } }
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", t === "dunkel" ? "#141922" : "#fbf8f3");
+    const b = document.getElementById("themaBtn");
+    if (b) {
+      b.textContent = t === "dunkel" ? "☀️ Hell" : "🌙 Dunkel";
+      b.setAttribute("aria-label", t === "dunkel" ? "Heller Modus" : "Dunkler Modus");
+    }
+  },
+  init() {
+    this.setze(this.jetzt(), false);
+    document.getElementById("themaBtn").addEventListener("click", () => this.setze(this.jetzt() === "dunkel" ? "hell" : "dunkel", true));
+    // Ohne eigene Wahl dem System folgen, auch wenn es abends umschaltet
+    try {
+      matchMedia("(prefers-color-scheme: dark)").addEventListener("change", ev => {
+        let gewaehlt = null;
+        try { gewaehlt = window.localStorage.getItem(this.KEY); } catch (e) { /* egal */ }
+        if (!gewaehlt) this.setze(ev.matches ? "dunkel" : "hell", false);
+      });
+    } catch (e) { /* älterer Browser */ }
+  },
+};
+
 function einstellungMerken() {
   Speicher.daten.einstellung = {
     fach: ui.fach, richtung: ui.richtung, abfrage: ui.abfrage, modus: ui.modus, laenge: ui.laenge,
@@ -2775,6 +2870,7 @@ try {
   }
 } catch (e) { /* ohne Offline weiter */ }
 baueKatalog();
+Thema.init();
 {
   const s = Speicher.daten.einstellung || {};
   if (FAECHER[s.fach]) ui.fach = s.fach;
