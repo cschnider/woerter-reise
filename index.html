@@ -1579,8 +1579,16 @@ function zeigeStimmeFehlt(lang) {
 const Erkenner = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
 /* Diagnose: Adresse mit #diagnose öffnen, dann protokolliert die App unten Mikrofon und Wiedergabe. */
-const FASSUNG = "12.11.2026 c";
-const DIAG = /diagnose/.test(location.hash);
+const FASSUNG = "12.11.2026 d";
+/* #diagnose schaltet ein, #normal aus; das Gerät merkt es sich (Safari verliert den #-Teil gern). */
+const DIAG = (() => {
+  const K = "woerter-reise-diagnose";
+  try {
+    if (/diagnose/.test(location.hash)) localStorage.setItem(K, "1");
+    if (/normal/.test(location.hash)) localStorage.removeItem(K);
+    return localStorage.getItem(K) === "1";
+  } catch (e) { return /diagnose/.test(location.hash); }
+})();
 const diagT0 = Date.now();
 function diag(text) {
   if (!DIAG) return;
@@ -1588,7 +1596,7 @@ function diag(text) {
   if (!box) {
     box = document.createElement("pre");
     box.id = "diagBox";
-    box.style.cssText = "position:fixed;left:0;right:0;bottom:0;max-height:38vh;overflow:auto;margin:0;padding:6px 8px;font:11px/1.35 ui-monospace,monospace;background:rgba(0,0,0,.85);color:#9f9;z-index:9999;white-space:pre-wrap";
+    box.style.cssText = "position:fixed;left:0;right:0;top:env(safe-area-inset-top,0);max-height:34vh;overflow:auto;margin:0;padding:6px 8px;font:11px/1.35 ui-monospace,monospace;background:rgba(0,0,0,.85);color:#9f9;z-index:9999;white-space:pre-wrap";
     document.body.appendChild(box);
     box.textContent = "Fassung " + FASSUNG + " · " + navigator.userAgent.replace(/^.*?\) /, "") + "\n";
   }
@@ -3024,6 +3032,14 @@ try {
 } catch (e) { /* ohne Offline weiter */ }
 baueKatalog();
 Thema.init();
+diag("Seite geladen, Mikrofon im Browser: " + (Erkenner ? "ja" : "nein"));
+(() => { // Fassung klein unten auf der Startseite (zum Prüfen, ob die neue Fassung geladen ist)
+  const f = document.createElement("div");
+  f.textContent = "Fassung " + FASSUNG + (DIAG ? " · Diagnose an" : "");
+  f.style.cssText = "text-align:center;font-size:12px;color:var(--muted,#888);margin:18px 0 90px";
+  const start = document.getElementById("start") || document.querySelector("main") || document.body;
+  start.appendChild(f);
+})();
 {
   const s = Speicher.daten.einstellung || {};
   if (FAECHER[s.fach]) ui.fach = s.fach;
