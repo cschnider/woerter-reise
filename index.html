@@ -669,6 +669,79 @@ const FAECHER = {
 };
 
 const UNITS = [
+  { fach: "fr", id: "fr-couleurs", name: "Les couleurs", woerter: `
+rot = rouge
+blau = bleu
+grün = vert
+gelb = jaune
+schwarz = noir
+weiss = blanc
+grau = gris
+braun = marron; brun
+rosa = rose
+orange = orange
+violett = violet
+` },
+  { fach: "fr", id: "fr-famille", name: "La famille", woerter: `
+die Familie = la famille
+die Mutter = la mère
+der Vater = le père
+die Eltern = les parents
+der Bruder = le frère
+die Schwester = la sœur
+der Sohn = le fils
+die Tochter = la fille
+die Grossmutter = la grand-mère
+der Grossvater = le grand-père
+der Onkel = l'oncle # l'oncle ist männlich
+die Tante = la tante
+der Cousin = le cousin
+die Cousine = la cousine
+` },
+  { fach: "fr", id: "fr-ecole", name: "À l'école", woerter: `
+die Schule = l'école # l'école ist weiblich
+das Buch = le livre
+das Heft = le cahier
+der Bleistift = le crayon
+der Kugelschreiber = le stylo
+der Radiergummi = la gomme
+das Lineal = la règle
+die Schere = les ciseaux # immer in der Mehrzahl
+die Schultasche = le sac d'école; le cartable
+der Tisch = la table
+der Stuhl = la chaise
+die Wandtafel = le tableau
+lesen = lire
+schreiben = écrire
+` },
+  { fach: "fr", id: "fr-animaux", name: "Les animaux", woerter: `
+der Hund = le chien
+die Katze = le chat
+das Pferd = le cheval # Mehrzahl: les chevaux
+die Kuh = la vache
+das Schwein = le cochon
+das Schaf = le mouton
+der Vogel = l'oiseau # l'oiseau ist männlich
+der Fisch = le poisson
+die Maus = la souris
+das Kaninchen = le lapin
+die Ente = le canard
+der Bär = l'ours # l'ours ist männlich
+` },
+  { fach: "fr", id: "fr-verbes", name: "Les verbes", woerter: `
+sein = être
+haben = avoir
+gehen = aller
+machen = faire
+spielen = jouer
+essen = manger
+trinken = boire
+sprechen = parler
+wohnen = habiter
+mögen; gern haben = aimer
+sich waschen = se laver
+ich heisse = je m'appelle
+` },
   { fach: "en", id: "en-nw2-u1", name: "Unit 1 – My Town", woerter: `
 // New World 2, Unit 1, S. 16 – Berufe
 der Bäcker; die Bäckerin = baker
@@ -879,6 +952,7 @@ das Piraten-Ehrenwort; das Piratenehrenwort = word of pirate honour
 
 /* Erwartete Anzahl Wörter je Unit – beim Ergänzen nachführen. */
 const KONTROLLE = {
+  "fr-couleurs": 11, "fr-famille": 14, "fr-ecole": 14, "fr-animaux": 12, "fr-verbes": 12,
   "en-nw2-u1": 33, "en-nw2-u2": 36, "en-nw2-u3": 37, "en-nw2-u4": 35, "en-nw2-u5": 35,
 };
 
@@ -1349,7 +1423,7 @@ const GUTE_STIMMEN = /thomas|amélie|amelie|aurélie|audrey|marie|daniel|kate|se
 const Aufnahmen = {
   dateien: null, stimmen: {}, laden: null,
   lade() {
-    if (!this.laden) this.laden = fetch("audio/index.json")
+    if (!this.laden) this.laden = fetch("audio/index.json", { cache: "no-cache" }) // neue Aufnahmen sofort sehen
       .then(r => r.ok ? r.json() : null)
       .then(j => { this.dateien = (j && j.dateien) || {}; this.stimmen = (j && j.stimmen) || {}; })
       .catch(() => { this.dateien = {}; });
@@ -1602,7 +1676,7 @@ function zeigeStimmeFehlt(lang) {
 const Erkenner = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
 /* Diagnose: Adresse mit #diagnose öffnen, dann protokolliert die App unten Mikrofon und Wiedergabe. */
-const FASSUNG = "12.11.2026 f";
+const FASSUNG = "12.11.2026 g";
 /* #diagnose schaltet ein, #normal aus; das Gerät merkt es sich (Safari verliert den #-Teil gern). */
 const DIAG = (() => {
   const K = "woerter-reise-diagnose";
