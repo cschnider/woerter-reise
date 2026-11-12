@@ -429,7 +429,29 @@
   .zeile .stand .x { color: var(--bad); font-weight: 700; }
   .leer-hinweis { color: var(--muted); padding: 12px; }
 
+  /* iPhone: Platz für die schwebende Safari-Leiste unten, keine Lupe/Markierung bei langem Drücken */
+  .app { padding-bottom: calc(env(safe-area-inset-bottom) + 96px); }
+  button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  .beenden { min-width: 44px; min-height: 44px; }
+
   @media (max-width: 480px) {
+    .app { padding-left: max(12px, env(safe-area-inset-left)); padding-right: max(12px, env(safe-area-inset-right)); }
+    .karte { min-height: 0; margin-top: 12px; padding: 20px 14px 20px; }
+    .status-wort { font-size: 13px; }
+    .richtung { font-size: 14px; margin-bottom: 8px; }
+    .schreiben { margin-top: 16px; }
+    .eingabe { font-size: 24px; padding: 11px 12px; border-radius: 12px; }
+    .akzente button { min-width: 44px; height: 44px; }
+    /* Aktionen als breite Daumen-Knöpfe nebeneinander */
+    .karte .aktionen { flex-wrap: nowrap; gap: 10px; margin-top: 16px; }
+    .karte .aktionen .btn { flex: 1 1 0; min-width: 0; padding: 15px 8px; font-size: 18px; min-height: 54px; }
+    .weiter-zeile { gap: 10px; }
+    .weiter-zeile .btn { flex: 1 1 100%; min-height: 54px; }
+    .weiter-zeile .btn.klein { min-height: 46px; }
+    .loesung { margin-top: 16px; }
+    .loesung .titel { font-size: 21px; }
+    .mikro-info { font-size: 14px; }
+    .spielstand { font-size: 14px; margin-top: 6px; }
     .level-icon { font-size: 36px; }
     .fach { font-size: 17px; padding: 10px 8px; }
     .zeile { grid-template-columns: 1fr 1fr; }
@@ -1737,7 +1759,7 @@ function zeigeStimmeFehlt(lang) {
 const Erkenner = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
 /* Diagnose: Adresse mit #diagnose öffnen, dann protokolliert die App unten Mikrofon und Wiedergabe. */
-const FASSUNG = "12.11.2026 j";
+const FASSUNG = "12.11.2026 k";
 /* #diagnose schaltet ein, #normal aus; das Gerät merkt es sich (Safari verliert den #-Teil gern). */
 const DIAG = (() => {
   const K = "woerter-reise-diagnose";
@@ -2565,7 +2587,22 @@ function zeigeLoesung(t, art, titelText, grund, wohinText) {
     box.appendChild(w);
   }
   box.hidden = false;
+  aufHandyZeigen();
 }
+
+/* iPhone: nach der Lösung Lösung und Knöpfe ins Bild holen (sonst unter Tastatur oder Safari-Leiste). */
+function aufHandyZeigen() {
+  if (!window.matchMedia || !matchMedia("(max-width: 480px)").matches) return;
+  setTimeout(() => {
+    const ziel = [$("weiterZeile"), $("bewertung")].find(x => !x.hidden) || $("loesung");
+    try { ziel.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (e) { /* älteres Safari */ }
+  }, 80);
+}
+/* iPhone: Tastatur geht auf – Frage und Eingabe oben halten. */
+$("eingabe").addEventListener("focus", () => {
+  if (!window.matchMedia || !matchMedia("(max-width: 480px)").matches) return;
+  setTimeout(() => { try { $("karte").scrollIntoView({ block: "start", behavior: "smooth" }); } catch (e) { /* egal */ } }, 250);
+});
 
 /* Spricht die fremde Lösung, wenn eingeschaltet. Gibt ein Versprechen zurück. */
 function sprichLoesung(t) {
