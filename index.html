@@ -1411,7 +1411,7 @@ const Stimme = {
     this.halt();
     return new Promise(fertig => {
       let lief = false;
-      const ende = ok => { clearTimeout(timer); p.onended = p.onerror = null; fertig(ok); };
+      const ende = ok => { clearTimeout(timer); p.onended = p.onerror = null; if (ok) this.freigeben(); fertig(ok); };
       const timer = setTimeout(() => ende(lief), 8000);
       p.onended = () => ende(true);
       p.onerror = () => ende(false);
@@ -1428,6 +1428,11 @@ const Stimme = {
   /* Tonausgabe ganz loslassen (vor dem Mikrofon, iOS). Die nächste Aufnahme setzt die Quelle neu. */
   freigeben() {
     try { if (this.spieler) { this.spieler.pause(); this.spieler.removeAttribute("src"); this.spieler.load(); } } catch (e) { /* egal */ }
+  },
+  /* iPhone/iPad: nach einer Wiedergabe bleibt der Ton im Modus «abspielen» und das Mikrofon hört nichts.
+     Audio Session (Safari 17+): vor dem Zuhören auf Aufnahme, danach zurück auf automatisch. */
+  modus(typ) {
+    try { if (navigator.audioSession && navigator.audioSession.type !== typ) navigator.audioSession.type = typ; } catch (e) { /* älteres Safari */ }
   },
   /* Alles stoppen, auch ein Vorlesen, das gerade erst lädt. */
   still() { this.nr++; this.halt(); },
@@ -2288,6 +2293,7 @@ function starteMikro() {
   Stimme.still();
   Stimme.freigeben(); // iOS: Tonausgabe loslassen, sonst bekommt die Spracherkennung keinen Ton
   stoppeMikro();
+  Stimme.modus("play-and-record");
   let rec;
   try { rec = new Erkenner(); } catch (e) { $("mikroInfo").textContent = "Das Mikrofon geht hier leider nicht."; return; }
   ui.erkennung = rec;
@@ -2304,6 +2310,7 @@ function starteMikro() {
     fertig = true;
     clearTimeout(stille); clearTimeout(notbremse);
     try { rec.abort(); } catch (e) { /* egal */ }
+    Stimme.modus("auto");
     if (ui.phase !== "frage") return;
     info.className = "mikro-info";
     const treffer = alt.find(x => passtGesprochen(x, t.ziel, t.zielSprache));
@@ -2329,6 +2336,7 @@ function starteMikro() {
     if (zwischen.length) { auswerten(zwischen); return; }
     fertig = true;
     clearTimeout(stille); clearTimeout(notbremse);
+    Stimme.modus("auto");
     info.className = "mikro-info";
     info.textContent = ev.error === "not-allowed"
       ? "Das Mikrofon ist nicht erlaubt. Sag es einfach laut und tippe auf «Lösung zeigen»."
@@ -2340,6 +2348,7 @@ function starteMikro() {
   rec.onend = () => {
     ui.erkennung = null;
     if (!fertig && zwischen.length) { auswerten(zwischen); return; }
+    Stimme.modus("auto");
     if (!fertig && ui.phase === "frage") {
       fertig = true; clearTimeout(notbremse);
       info.className = "mikro-info"; info.textContent = "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen».";
@@ -2348,7 +2357,7 @@ function starteMikro() {
   try { rec.start(); } catch (e) { clearTimeout(notbremse); info.className = "mikro-info"; info.textContent = "Das Mikrofon geht hier leider nicht."; }
 }
 function stoppeMikro() {
-  if (ui.erkennung) { try { ui.erkennung.abort(); } catch (e) { /* egal */ } ui.erkennung = null; }
+  if (ui.erkennung) { try { ui.erkennung.abort(); } catch (e) { /* egal */ } ui.erkennung = null; Stimme.modus("auto"); }
 }
 
 function weiter() {
