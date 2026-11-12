@@ -1086,7 +1086,7 @@ function parseUnit(unit, linksFremd) {
 function norm(s) {
   return String(s).normalize("NFC").toLowerCase()
     .replace(/[’`´‘]/g, "'").replace(/ß/g, "ss")
-    .replace(/[.!?¡¿,;:"«»()…]/g, " ")
+    .replace(/[.!?¡¿,;:"«»()…\/\\|_*]/g, " ")
     .replace(/\s*-\s*/g, "")   // Bindestrich egal: T-Shirt = TShirt
     .replace(/\s*'\s*/g, "'")
     .replace(/\s+/g, " ").trim();
@@ -1135,6 +1135,17 @@ function levenshtein(a, b) {
  * Deutsch und Englisch: Artikel freiwillig. Französisch: Artikel gehört dazu (sonst «fast»).
  */
 function pruefe(eingabe, ziele, sprache) {
+  const ganz = pruefeEine(eingabe, ziele, sprache);
+  if (ganz.ergebnis === "r") return ganz;
+  // Mehrere Lösungen auf einmal («waiter / waitress», «waiter, waitress», «waiter or waitress»):
+  // jeder Teil wird einzeln geprüft, der schwächste zählt.
+  const teile = String(eingabe).split(/\s*[\/;,|+&]\s*|\s+(?:or|oder|ou|and|und|et)\s+/i).filter(t => t.trim());
+  if (teile.length < 2) return ganz;
+  const r = teile.map(t => pruefeEine(t, ziele, sprache));
+  if (r.some(x => x.ergebnis === "f")) return ganz;
+  return r.find(x => x.ergebnis === "a") || r[0];
+}
+function pruefeEine(eingabe, ziele, sprache) {
   let e = norm(eingabe);
   // Französisch: vergessener Apostroph («l oncle» = «l'oncle»)
   if (sprache === "fr") e = e.replace(/(^|\s)(l|j|d|m|n|s|t|qu)\s+(?=[aeiouyhéèêàâîïôûœ])/g, "$1$2'");
@@ -1174,9 +1185,12 @@ function passtGesprochen(gehoert, ziele, sprache) {
     if (sprache === "en") t = kurzformEn(t);
     return ohneAkzent(ohneArtikel(t, sprache));
   };
-  const e = vorbereiten(gehoert);
-  return ziele.flatMap(varianten).map(vorbereiten)
-    .some(v => v === e || (v.length >= 4 && levenshtein(v, e) <= 1));
+  const V = ziele.flatMap(varianten).map(vorbereiten);
+  const passt = x => { const e = vorbereiten(x); return !!e && V.some(v => v === e || (v.length >= 4 && levenshtein(v, e) <= 1)); };
+  if (passt(gehoert)) return true;
+  // «waiter or waitress»: beide Lösungen auf einmal gesagt
+  const teile = String(gehoert).split(/\s+(?:or|oder|ou|and|und|et)\s+/i).filter(t => t.trim());
+  return teile.length > 1 && teile.every(passt);
 }
 
 /* =====================================================================
@@ -1759,7 +1773,7 @@ function zeigeStimmeFehlt(lang) {
 const Erkenner = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
 /* Diagnose: Adresse mit #diagnose öffnen, dann protokolliert die App unten Mikrofon und Wiedergabe. */
-const FASSUNG = "12.11.2026 k";
+const FASSUNG = "12.11.2026 l";
 /* #diagnose schaltet ein, #normal aus; das Gerät merkt es sich (Safari verliert den #-Teil gern). */
 const DIAG = (() => {
   const K = "woerter-reise-diagnose";
