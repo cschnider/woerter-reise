@@ -1425,6 +1425,10 @@ const Stimme = {
       } catch (e) { ende(false); }
     });
   },
+  /* Tonausgabe ganz loslassen (vor dem Mikrofon, iOS). Die nächste Aufnahme setzt die Quelle neu. */
+  freigeben() {
+    try { if (this.spieler) { this.spieler.pause(); this.spieler.removeAttribute("src"); this.spieler.load(); } } catch (e) { /* egal */ }
+  },
   /* Alles stoppen, auch ein Vorlesen, das gerade erst lädt. */
   still() { this.nr++; this.halt(); },
   halt() {
@@ -2282,44 +2286,66 @@ function starteMikro() {
   if (!Erkenner || ui.phase !== "frage") return;
   const t = aktuelleTeile();
   Stimme.still();
+  Stimme.freigeben(); // iOS: Tonausgabe loslassen, sonst bekommt die Spracherkennung keinen Ton
   stoppeMikro();
   let rec;
   try { rec = new Erkenner(); } catch (e) { $("mikroInfo").textContent = "Das Mikrofon geht hier leider nicht."; return; }
   ui.erkennung = rec;
   rec.lang = t.zielStimme;
-  rec.interimResults = false;
+  rec.interimResults = true;   // iOS liefert oft nur Zwischenergebnisse
   rec.maxAlternatives = 5;
   rec.continuous = false;
   const info = $("mikroInfo");
   info.className = "mikro-info hoert";
   info.textContent = "🎤 Ich höre zu …";
-  let fertig = false;
-  rec.onresult = ev => {
+  let fertig = false, zwischen = [], stille = null;
+  const auswerten = alt => {
+    if (fertig) return;
     fertig = true;
-    const alt = [...ev.results[0]].map(x => x.transcript);
+    clearTimeout(stille); clearTimeout(notbremse);
+    try { rec.abort(); } catch (e) { /* egal */ }
+    if (ui.phase !== "frage") return;
     info.className = "mikro-info";
-    const passt = alt.some(x => passtGesprochen(x, t.ziel, t.zielSprache));
-    if (passt) {
-      info.textContent = `Verstanden: «${alt.find(x => passtGesprochen(x, t.ziel, t.zielSprache))}»`;
-      loesen(true, true); // vorgelesen wird erst in bewerte, sonst laufen zwei Stimmen
-      bewerte("r", true);
-    } else {
-      loesen(true, true);
-      bewerte("f", true, alt[0]);
-    }
+    const treffer = alt.find(x => passtGesprochen(x, t.ziel, t.zielSprache));
+    loesen(true, true); // vorgelesen wird erst in bewerte, sonst laufen zwei Stimmen
+    if (treffer) bewerte("r", true); else bewerte("f", true, alt[0]);
+  };
+  // Spätestens nach 8 s auswerten, was gehört wurde (iOS beendet manchmal nicht von selbst)
+  const notbremse = setTimeout(() => { if (zwischen.length) auswerten(zwischen); else try { rec.stop(); } catch (e) { /* egal */ } }, 8000);
+  rec.onresult = ev => {
+    const r = ev.results[ev.results.length - 1];
+    const alt = [...r].map(x => x.transcript.trim()).filter(Boolean);
+    if (!alt.length) return;
+    if (r.isFinal) { auswerten(alt); return; }
+    zwischen = alt;
+    info.textContent = `🎤 «${alt[0]}» …`;
+    // Passt es schon, nicht weiter warten; sonst nach 1.2 s Ruhe auswerten
+    if (alt.some(x => passtGesprochen(x, t.ziel, t.zielSprache))) { auswerten(alt); return; }
+    clearTimeout(stille);
+    stille = setTimeout(() => auswerten(zwischen), 1200);
   };
   rec.onerror = ev => {
+    if (fertig) return;
+    if (zwischen.length) { auswerten(zwischen); return; }
     fertig = true;
+    clearTimeout(stille); clearTimeout(notbremse);
     info.className = "mikro-info";
-    info.textContent = ev.error === "not-allowed" || ev.error === "service-not-allowed"
+    info.textContent = ev.error === "not-allowed"
       ? "Das Mikrofon ist nicht erlaubt. Sag es einfach laut und tippe auf «Lösung zeigen»."
-      : ev.error === "no-speech" ? "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»." : "Das hat nicht geklappt. Nochmals versuchen?";
+      : ev.error === "service-not-allowed"
+      ? "Die Spracherkennung ist aus. iPhone/iPad: Einstellungen › Allgemein › Tastatur › «Diktieren» einschalten."
+      : ev.error === "no-speech" ? "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»."
+      : `Das hat nicht geklappt (${ev.error}). Nochmals versuchen?`;
   };
   rec.onend = () => {
     ui.erkennung = null;
-    if (!fertig && ui.phase === "frage") { info.className = "mikro-info"; info.textContent = "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»."; }
+    if (!fertig && zwischen.length) { auswerten(zwischen); return; }
+    if (!fertig && ui.phase === "frage") {
+      fertig = true; clearTimeout(notbremse);
+      info.className = "mikro-info"; info.textContent = "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen».";
+    }
   };
-  try { rec.start(); } catch (e) { info.className = "mikro-info"; info.textContent = "Das Mikrofon geht hier leider nicht."; }
+  try { rec.start(); } catch (e) { clearTimeout(notbremse); info.className = "mikro-info"; info.textContent = "Das Mikrofon geht hier leider nicht."; }
 }
 function stoppeMikro() {
   if (ui.erkennung) { try { ui.erkennung.abort(); } catch (e) { /* egal */ } ui.erkennung = null; }
