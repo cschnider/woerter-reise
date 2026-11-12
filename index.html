@@ -1431,6 +1431,8 @@ const Stimme = {
   async sprich(text, lang) {
     if (!text) return;
     const nr = ++this.nr;
+    await Mikro.ruhig(); // iOS: nie abspielen, solange die Spracherkennung noch abbaut
+    if (nr !== this.nr) return;
     const datei = await Aufnahmen.datei(text, lang);
     if (nr !== this.nr) return;
     if (datei && await this.spiele(datei)) return;
@@ -1494,11 +1496,6 @@ const Stimme = {
   /* Tonausgabe ganz loslassen (vor dem Mikrofon, iOS). Die nächste Aufnahme setzt die Quelle neu. */
   freigeben() {
     try { if (this.spieler) { this.spieler.pause(); this.spieler.removeAttribute("src"); this.spieler.load(); } } catch (e) { /* egal */ }
-  },
-  /* iPhone/iPad: nach einer Wiedergabe bleibt der Ton im Modus «abspielen» und das Mikrofon hört nichts.
-     Audio Session (Safari 17+): vor dem Zuhören auf Aufnahme, danach zurück auf automatisch. */
-  modus(typ) {
-    try { if (navigator.audioSession && navigator.audioSession.type !== typ) navigator.audioSession.type = typ; } catch (e) { /* älteres Safari */ }
   },
   /* Alles stoppen, auch ein Vorlesen, das gerade erst lädt. */
   still() { this.nr++; this.halt(); },
@@ -1754,7 +1751,9 @@ const ui = {
   warteschlange: [],
   rueck: null,
   listeFilter: "alle",
-  erkennung: null,
+  mikroStartet: false,
+  mikroAn: false,       // Spracheingabe bleibt von Wort zu Wort an, bis man sie ausschaltet oder nichts hört
+  frageNr: 0,
 };
 
 /* Hell/Dunkel: Wahl je Gerät (eigener Schlüssel, wird nicht online abgeglichen). */
@@ -2203,17 +2202,23 @@ function zeigeFrage() {
     inp.focus({ preventScroll: true });
   } else {
     $("mikroBtn").hidden = !Erkenner;
+    mikroKnopf();
     $("loesenBtn").focus({ preventScroll: true });
   }
   aktualisiereSpielstand();
-  if (ui.vorlesen && t.fremdIstFrage) setTimeout(() => sprichFrage(), 250);
+  const vorlesen = ui.vorlesen && t.fremdIstFrage;
+  const nr = ++ui.frageNr;
+  // Mikrofon bleibt an: nach der Frage (und ihrem Vorlesen) gleich wieder zuhören
+  const zuhoeren = () => { if (nr === ui.frageNr && ui.mikroAn && !schreiben && ui.phase === "frage") starteMikro(); };
+  if (vorlesen) setTimeout(() => { const v = sprichFrage(); if (ui.mikroAn) v.then(() => setTimeout(zuhoeren, 150)); }, 250);
+  else if (ui.mikroAn && !schreiben) setTimeout(zuhoeren, 350);
 }
 
 function sprichFrage() {
   const t = aktuelleTeile();
   const b = $("frageLaut");
   b.classList.add("spricht");
-  Stimme.sprich(t.frage.join(", "), FAECHER[t.e.fach].stimme).then(() => b.classList.remove("spricht"));
+  return Stimme.sprich(t.frage.join(", "), FAECHER[t.e.fach].stimme).then(() => b.classList.remove("spricht"));
 }
 
 function aktualisiereSpielstand() {
@@ -2381,40 +2386,83 @@ function bewerte(ergebnis, vomMikro, gehoert) {
   $("weiterZeile").hidden = false;
 }
 
-/* Mikrofon (nur mündlich, nur wenn der Browser es kann). */
-function starteMikro() {
-  if (!Erkenner || ui.phase !== "frage") return;
+/* Mikrofon (nur mündlich, nur wenn der Browser es kann).
+   iPhone/iPad (Safari): ein neuer Erkenner je Wort hört nach dem ersten Mal oft nichts mehr, und abort()
+   oder eine Wiedergabe, solange die Erkennung noch abbaut, lässt das Mikrofon stumm. Darum: EIN Erkenner
+   für die ganze Sitzung, sanft mit stop() beenden, und erst nach seinem Ende vorlesen oder neu zuhören. */
+const Mikro = {
+  rec: null,
+  laeuft: false,
+  sitzung: 0,
+  endeWarte: [],
+  hole() {
+    if (!this.rec) {
+      this.rec = new Erkenner();
+      this.rec.interimResults = true;   // iOS liefert oft nur Zwischenergebnisse
+      this.rec.maxAlternatives = 5;
+      this.rec.continuous = false;
+    }
+    return this.rec;
+  },
+  /* Erfüllt sich, wenn die Erkennung ganz beendet ist (höchstens 1.5 s), plus kurze Ruhe für iOS. */
+  ruhig() {
+    if (!this.laeuft) return Promise.resolve();
+    return Promise.race([new Promise(r => this.endeWarte.push(r)), pause(1500)]).then(() => pause(250));
+  },
+  beendet() {
+    this.laeuft = false;
+    const w = this.endeWarte; this.endeWarte = [];
+    w.forEach(r => r());
+  },
+  /* Laufende Erkennung beenden; ihre späteren Ergebnisse werden nicht mehr beachtet. */
+  stopp() {
+    this.sitzung++;
+    if (this.laeuft && this.rec) { try { this.rec.stop(); } catch (e) { this.beendet(); } }
+  },
+};
+
+async function starteMikro() {
+  if (!Erkenner || ui.phase !== "frage" || ui.mikroStartet) return;
   const t = aktuelleTeile();
+  const info = $("mikroInfo");
+  ui.mikroStartet = true;
   Stimme.still();
   Stimme.freigeben(); // iOS: Tonausgabe loslassen, sonst bekommt die Spracherkennung keinen Ton
-  stoppeMikro();
-  Stimme.modus("play-and-record");
+  Mikro.stopp();
+  await Mikro.ruhig();
+  ui.mikroStartet = false;
+  if (ui.phase !== "frage") return;
   let rec;
-  try { rec = new Erkenner(); } catch (e) { $("mikroInfo").textContent = "Das Mikrofon geht hier leider nicht."; return; }
-  ui.erkennung = rec;
+  try { rec = Mikro.hole(); } catch (e) { info.textContent = "Das Mikrofon geht hier leider nicht."; return; }
+  const nr = ++Mikro.sitzung;
+  const aktiv = () => nr === Mikro.sitzung;
   rec.lang = t.zielStimme;
-  rec.interimResults = true;   // iOS liefert oft nur Zwischenergebnisse
-  rec.maxAlternatives = 5;
-  rec.continuous = false;
-  const info = $("mikroInfo");
   info.className = "mikro-info hoert";
   info.textContent = "🎤 Ich höre zu …";
-  let fertig = false, zwischen = [], stille = null;
+  let fertig = false, zwischen = [], stille = null, notbremse = null;
   const auswerten = alt => {
-    if (fertig) return;
+    if (fertig || !aktiv()) return;
     fertig = true;
     clearTimeout(stille); clearTimeout(notbremse);
-    try { rec.abort(); } catch (e) { /* egal */ }
-    Stimme.modus("auto");
+    Mikro.stopp(); // sanft beenden; vorgelesen wird erst, wenn die Erkennung ganz zu ist (Stimme.sprich wartet)
     if (ui.phase !== "frage") return;
     info.className = "mikro-info";
     const treffer = alt.find(x => passtGesprochen(x, t.ziel, t.zielSprache));
     loesen(true, true); // vorgelesen wird erst in bewerte, sonst laufen zwei Stimmen
     if (treffer) bewerte("r", true); else bewerte("f", true, alt[0]);
   };
-  // Spätestens nach 8 s auswerten, was gehört wurde (iOS beendet manchmal nicht von selbst)
-  const notbremse = setTimeout(() => { if (zwischen.length) auswerten(zwischen); else try { rec.stop(); } catch (e) { /* egal */ } }, 8000);
+  const nichtsGehoert = text => {
+    if (fertig || !aktiv()) return;
+    fertig = true;
+    clearTimeout(stille); clearTimeout(notbremse);
+    ui.mikroAn = false; // nichts gehört oder Fehler: nicht endlos weiterhorchen
+    mikroKnopf();
+    if (ui.phase !== "frage") return;
+    info.className = "mikro-info";
+    info.textContent = text;
+  };
   rec.onresult = ev => {
+    if (!aktiv()) return;
     const r = ev.results[ev.results.length - 1];
     const alt = [...r].map(x => x.transcript.trim()).filter(Boolean);
     if (!alt.length) return;
@@ -2427,33 +2475,32 @@ function starteMikro() {
     stille = setTimeout(() => auswerten(zwischen), 1200);
   };
   rec.onerror = ev => {
-    if (fertig) return;
+    if (!aktiv()) return;
     if (zwischen.length) { auswerten(zwischen); return; }
-    fertig = true;
-    clearTimeout(stille); clearTimeout(notbremse);
-    Stimme.modus("auto");
-    info.className = "mikro-info";
-    info.textContent = ev.error === "not-allowed"
+    nichtsGehoert(ev.error === "not-allowed"
       ? "Das Mikrofon ist nicht erlaubt. Sag es einfach laut und tippe auf «Lösung zeigen»."
       : ev.error === "service-not-allowed"
       ? "Die Spracherkennung ist aus. iPhone/iPad: Einstellungen › Allgemein › Tastatur › «Diktieren» einschalten."
       : ev.error === "no-speech" ? "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»."
-      : `Das hat nicht geklappt (${ev.error}). Nochmals versuchen?`;
+      : ev.error === "aborted" ? "Nochmals 🎤 antippen."
+      : `Das hat nicht geklappt (${ev.error}). Nochmals 🎤 antippen.`);
   };
   rec.onend = () => {
-    ui.erkennung = null;
-    if (!fertig && zwischen.length) { auswerten(zwischen); return; }
-    Stimme.modus("auto");
-    if (!fertig && ui.phase === "frage") {
-      fertig = true; clearTimeout(notbremse);
-      info.className = "mikro-info"; info.textContent = "Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen».";
-    }
+    Mikro.beendet();
+    if (!aktiv()) return;
+    if (zwischen.length) { auswerten(zwischen); return; }
+    nichtsGehoert("Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen».");
   };
-  try { rec.start(); } catch (e) { clearTimeout(notbremse); info.className = "mikro-info"; info.textContent = "Das Mikrofon geht hier leider nicht."; }
+  // Spätestens nach 8 s auswerten, was gehört wurde (iOS beendet manchmal nicht von selbst)
+  notbremse = setTimeout(() => { if (!aktiv()) return; if (zwischen.length) auswerten(zwischen); else { nichtsGehoert("Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»."); Mikro.stopp(); } }, 8000);
+  try { rec.start(); Mikro.laeuft = true; }
+  catch (e) {
+    // Läuft noch eine alte Erkennung: einmal sauber neu (frischer Erkenner)
+    try { Mikro.rec = null; rec = Mikro.hole(); } catch (e2) { /* unten */ }
+    nichtsGehoert("Das Mikrofon war noch belegt. Nochmals 🎤 antippen.");
+  }
 }
-function stoppeMikro() {
-  if (ui.erkennung) { try { ui.erkennung.abort(); } catch (e) { /* egal */ } ui.erkennung = null; Stimme.modus("auto"); }
-}
+function stoppeMikro() { Mikro.stopp(); }
 
 function weiter() {
   clearTimeout(ui.timer);
@@ -2478,7 +2525,22 @@ $("akzente").addEventListener("click", ev => {
   inp.focus({ preventScroll: true });
 });
 $("loesenBtn").addEventListener("click", () => loesen());
-$("mikroBtn").addEventListener("click", starteMikro);
+/* Knopf: einschalten (bleibt dann von Wort zu Wort an) oder ausschalten. */
+function mikroKnopf() { $("mikroBtn").textContent = ui.mikroAn ? "⏹ Mikro aus" : "🎤 Sagen"; }
+$("mikroBtn").addEventListener("click", () => {
+  if (ui.mikroAn) {
+    ui.mikroAn = false;
+    mikroKnopf();
+    stoppeMikro();
+    const info = $("mikroInfo");
+    info.className = "mikro-info";
+    info.textContent = "Mikrofon aus. 🎤 antippen, um wieder zu sprechen.";
+    return;
+  }
+  ui.mikroAn = true;
+  mikroKnopf();
+  starteMikro();
+});
 $("bewertung").addEventListener("click", ev => {
   const b = ev.target.closest(".bew");
   if (b) bewerte(b.dataset.bew, false);
