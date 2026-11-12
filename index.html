@@ -1386,6 +1386,7 @@ const Stimme = {
     if (this.spieler) {
       const freischalten = () => {
         try { this.spieler.src = stilleWav(); const p = this.spieler.play(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* egal */ }
+        this.webAudio(); // Web Audio im selben Tippen entsperren (iOS)
       };
       document.addEventListener("pointerdown", freischalten, { once: true, capture: true });
       document.addEventListener("keydown", freischalten, { once: true, capture: true });
@@ -1470,10 +1471,69 @@ const Stimme = {
       return url;
     } catch (e) { return "audio/" + datei; }
   },
+  /* Web Audio (AudioContext): iPhone/iPad-Safari lässt die Spracherkennung nach einer Wiedergabe über
+     <audio> verstummen (WebKit-Fehler 321436), über Web Audio nicht. Darum Aufnahmen hierüber abspielen. */
+  ctx: null,
+  puffer: new Map(),
+  quelleWa: null,
+  webAudio() {
+    if (this.ctx) { if (this.ctx.state !== "running") try { this.ctx.resume(); } catch (e) { /* egal */ } return this.ctx; }
+    const K = window.AudioContext || window.webkitAudioContext;
+    if (!K) return null;
+    try {
+      this.ctx = new K();
+      const leer = this.ctx.createBuffer(1, 1, 22050), q = this.ctx.createBufferSource();
+      q.buffer = leer; q.connect(this.ctx.destination); q.start(0);
+      if (this.ctx.state !== "running") this.ctx.resume();
+    } catch (e) { this.ctx = null; }
+    return this.ctx;
+  },
+  async pufferFuer(datei) {
+    if (this.puffer.has(datei)) return this.puffer.get(datei);
+    const ctx = this.webAudio();
+    if (!ctx) return null;
+    try {
+      const r = await fetch("audio/" + datei);
+      if (!r.ok) throw new Error(r.status);
+      const daten = await r.arrayBuffer();
+      const buf = await new Promise((ja, nein) => { const p = ctx.decodeAudioData(daten, ja, nein); if (p && p.then) p.then(ja, nein); });
+      this.puffer.set(datei, buf);
+      return buf;
+    } catch (e) { return null; }
+  },
+  async spieleWa(datei, nr) {
+    const buf = await this.pufferFuer(datei);
+    if (!buf) return null;
+    if (nr !== this.nr) return true;
+    const ctx = this.ctx;
+    try { if (ctx.state !== "running") await ctx.resume(); } catch (e) { /* egal */ }
+    if (ctx.state !== "running") return null;
+    this.halt();
+    return new Promise(fertig => {
+      let q;
+      try {
+        q = ctx.createBufferSource();
+        q.buffer = buf;
+        q.connect(ctx.destination);
+      } catch (e) { fertig(null); return; }
+      const timer = setTimeout(() => ende(true), buf.duration * 1000 + 1500);
+      const ende = ok => { clearTimeout(timer); q.onended = null; if (this.quelleWa === q) this.quelleWa = this.endeWa = null; fertig(ok); };
+      q.onended = () => ende(true);
+      this.quelleWa = q;
+      this.endeWa = ende;
+      try { q.start(0); } catch (e) { ende(null); }
+    });
+  },
   async spiele(datei) {
+    const nr = this.nr;
+    // Langsam (Tonhöhe bleibt nur mit <audio>) nur, wenn das Mikrofon nicht an ist
+    if (!(ui.langsam && !ui.mikroAn)) {
+      const wa = await this.spieleWa(datei, nr);
+      if (wa !== null) return wa;
+      if (nr !== this.nr) return true;
+    }
     const p = this.spieler;
     if (!p) return false;
-    const nr = this.nr;
     const src = await this.quelle(datei);
     if (nr !== this.nr) return true; // inzwischen abgelöst: still bleiben, keine Ersatzstimme
     this.halt();
@@ -1500,6 +1560,7 @@ const Stimme = {
   /* Alles stoppen, auch ein Vorlesen, das gerade erst lädt. */
   still() { this.nr++; this.halt(); },
   halt() {
+    try { if (this.quelleWa) { const q = this.quelleWa, f = this.endeWa; this.quelleWa = this.endeWa = null; q.onended = null; q.stop(); if (f) f(true); } } catch (e) { /* egal */ }
     try { if (this.spieler) this.spieler.pause(); } catch (e) { /* egal */ }
     try { if (this.kannGeraet()) window.speechSynthesis.cancel(); } catch (e) { /* egal */ }
   },
@@ -2411,6 +2472,7 @@ const Mikro = {
   },
   beendet() {
     this.laeuft = false;
+    this.rec = null; // nächstes Mal ein frischer Erkenner (erst nach dem Ende, nie zwei gleichzeitig)
     const w = this.endeWarte; this.endeWarte = [];
     w.forEach(r => r());
   },
