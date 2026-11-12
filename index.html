@@ -1559,6 +1559,28 @@ const Stimme = {
   freigeben() {
     try { if (this.spieler) { this.spieler.pause(); this.spieler.removeAttribute("src"); this.spieler.load(); } } catch (e) { /* egal */ }
   },
+  /* Kurze Ansage mit der Gerätestimme (speechSynthesis), erfüllt sich an ihrem Ende (höchstens 5 s).
+     Dient auf iOS als «Weckruf» vor jeder Spracherkennung. */
+  ansage(text, lang) {
+    if (!this.kannGeraet() || !text) return Promise.resolve();
+    return this.bereit().then(() => new Promise(fertig => {
+      let fertigSchon = false;
+      const ende = grund => { if (fertigSchon) return; fertigSchon = true; clearTimeout(timer); diag("Ansage Ende (" + grund + ")"); fertig(); };
+      const timer = setTimeout(() => ende("Frist"), 5000);
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text.replace(/[()]/g, ""));
+        u.lang = lang;
+        const v = this.waehle(lang) || this.waehle(lang.slice(0, 2));
+        if (v) { u.voice = v; u.lang = v.lang; }
+        u.rate = 0.95;
+        u.onend = () => ende("end");
+        u.onerror = ev => ende("Fehler " + (ev && ev.error));
+        diag("Ansage «" + text + "» " + lang + (v ? " " + v.name : " ohne Stimme"));
+        window.speechSynthesis.speak(u);
+      } catch (e) { ende("Ausnahme"); }
+    }));
+  },
   /* Alles stoppen, auch ein Vorlesen, das gerade erst lädt. */
   still() { this.nr++; this.halt(); },
   halt() {
@@ -1579,7 +1601,7 @@ function zeigeStimmeFehlt(lang) {
 const Erkenner = window.SpeechRecognition || window.webkitSpeechRecognition || null;
 
 /* Diagnose: Adresse mit #diagnose öffnen, dann protokolliert die App unten Mikrofon und Wiedergabe. */
-const FASSUNG = "12.11.2026 d";
+const FASSUNG = "12.11.2026 e";
 /* #diagnose schaltet ein, #normal aus; das Gerät merkt es sich (Safari verliert den #-Teil gern). */
 const DIAG = (() => {
   const K = "woerter-reise-diagnose";
@@ -2299,8 +2321,8 @@ function zeigeFrage() {
   const nr = ++ui.frageNr;
   // Mikrofon bleibt an: nach der Frage (und ihrem Vorlesen) gleich wieder zuhören
   const zuhoeren = () => { if (nr === ui.frageNr && ui.mikroAn && !schreiben && ui.phase === "frage") starteMikro(); };
-  if (vorlesen) setTimeout(() => { const v = sprichFrage(); if (ui.mikroAn) v.then(() => setTimeout(zuhoeren, 150)); }, 250);
-  else if (ui.mikroAn && !schreiben) setTimeout(zuhoeren, 350);
+  if (ui.mikroAn && !schreiben) setTimeout(zuhoeren, 350); // starteMikro sagt die Frage selbst
+  else if (vorlesen) setTimeout(() => sprichFrage(), 250);
 }
 
 function sprichFrage() {
@@ -2494,10 +2516,16 @@ const Mikro = {
     }
     return this.rec;
   },
-  /* Erfüllt sich, wenn die Erkennung ganz beendet ist (höchstens 1.5 s), plus kurze Ruhe für iOS. */
+  /* Erfüllt sich, wenn die Erkennung von selbst zu Ende ist (höchstens 5 s, dann doch stoppen). */
   ruhig() {
     if (!this.laeuft) return Promise.resolve();
-    return Promise.race([new Promise(r => this.endeWarte.push(r)), pause(1500)]).then(() => pause(250));
+    const ende = new Promise(r => this.endeWarte.push(r));
+    return Promise.race([ende, pause(5000)]).then(() => {
+      if (!this.laeuft) return;
+      diag("  Erkenner endet nicht von selbst – stop()");
+      try { this.rec.stop(); } catch (e) { this.beendet(); }
+      return Promise.race([ende, pause(1500)]);
+    }).then(() => pause(150));
   },
   beendet() {
     this.laeuft = false;
@@ -2505,10 +2533,12 @@ const Mikro = {
     const w = this.endeWarte; this.endeWarte = [];
     w.forEach(r => r());
   },
-  /* Laufende Erkennung beenden; ihre späteren Ergebnisse werden nicht mehr beachtet. */
-  stopp() {
+  /* Ergebnisse der laufenden Erkennung nicht mehr beachten. Abgebrochen wird sie nur mit hart=true
+     (Mikro aus, Pause): auf iOS hört jede Erkennung nach einer abgebrochenen nichts mehr (WebKit 321436),
+     darum lassen wir sie sonst von selbst enden. */
+  stopp(hart) {
     this.sitzung++;
-    if (this.laeuft && this.rec) { try { this.rec.stop(); } catch (e) { this.beendet(); } }
+    if (hart && this.laeuft && this.rec) { try { this.rec.stop(); } catch (e) { this.beendet(); } }
   },
 };
 
@@ -2517,10 +2547,19 @@ async function starteMikro() {
   const t = aktuelleTeile();
   const info = $("mikroInfo");
   ui.mikroStartet = true;
+  const frageNr = ui.frageNr;
   Stimme.still();
   Stimme.freigeben(); // iOS: Tonausgabe loslassen, sonst bekommt die Spracherkennung keinen Ton
-  Mikro.stopp();
+  Mikro.stopp(false);
   await Mikro.ruhig();
+  // iOS: unmittelbar vor dem Zuhören die Frage mit der Gerätestimme sagen und gleich danach starten.
+  // Nur so hört die Erkennung auf iPhone/iPad auch beim zweiten und jedem weiteren Mal (WebKit 321436).
+  if (frageNr === ui.frageNr && ui.phase === "frage") {
+    info.className = "mikro-info";
+    info.textContent = "🔈 …";
+    await Stimme.ansage(t.frage.join(", "), t.frageLang);
+  }
+  if (frageNr !== ui.frageNr) { ui.mikroStartet = false; return; }
   // iOS: Tonausgabe ganz anhalten, solange zugehört wird (die nächste Wiedergabe setzt sie fort)
   try { if (Stimme.ctx && Stimme.ctx.state === "running") await Stimme.ctx.suspend(); } catch (e) { /* egal */ }
   ui.mikroStartet = false;
@@ -2537,7 +2576,7 @@ async function starteMikro() {
     if (fertig || !aktiv()) return;
     fertig = true;
     clearTimeout(stille); clearTimeout(notbremse);
-    Mikro.stopp(); // sanft beenden; vorgelesen wird erst, wenn die Erkennung ganz zu ist (Stimme.sprich wartet)
+    Mikro.stopp(false); // nicht abbrechen; vorgelesen wird erst, wenn die Erkennung von selbst zu ist (Stimme.sprich wartet)
     if (ui.phase !== "frage") return;
     info.className = "mikro-info";
     const treffer = alt.find(x => passtGesprochen(x, t.ziel, t.zielSprache));
@@ -2589,7 +2628,7 @@ async function starteMikro() {
     nichtsGehoert("Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen».");
   };
   // Spätestens nach 8 s auswerten, was gehört wurde (iOS beendet manchmal nicht von selbst)
-  notbremse = setTimeout(() => { if (!aktiv()) return; if (zwischen.length) auswerten(zwischen); else { nichtsGehoert("Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»."); Mikro.stopp(); } }, 8000);
+  notbremse = setTimeout(() => { if (!aktiv()) return; if (zwischen.length) auswerten(zwischen); else { nichtsGehoert("Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»."); Mikro.stopp(true); } }, 8000);
   diag("Mikro start #" + nr + " (" + rec.lang + "), Tippen aktiv: " + (navigator.userActivation ? navigator.userActivation.isActive : "?") + ", Kontext " + (Stimme.ctx ? Stimme.ctx.state : "–"));
   try { rec.start(); Mikro.laeuft = true; }
   catch (e) {
@@ -2599,7 +2638,7 @@ async function starteMikro() {
     nichtsGehoert("Das Mikrofon war noch belegt. Nochmals 🎤 antippen.");
   }
 }
-function stoppeMikro() { Mikro.stopp(); }
+function stoppeMikro(hart) { Mikro.stopp(hart); }
 
 function weiter() {
   clearTimeout(ui.timer);
@@ -2630,7 +2669,7 @@ $("mikroBtn").addEventListener("click", () => {
   if (ui.mikroAn) {
     ui.mikroAn = false;
     mikroKnopf();
-    stoppeMikro();
+    stoppeMikro(true);
     const info = $("mikroInfo");
     info.className = "mikro-info";
     info.textContent = "Mikrofon aus. 🎤 antippen, um wieder zu sprechen.";
@@ -2683,7 +2722,7 @@ document.addEventListener("keydown", ev => {
 
 $("pauseBtn").addEventListener("click", () => {
   clearTimeout(ui.timer);
-  stoppeMikro();
+  stoppeMikro(true);
   Stimme.still();
   if (ui.phase === "antwort" && ui.runde.index >= ui.runde.items.length) { zeigeEnde(); return; }
   if (ui.phase === "bewerten") ui.phase = "frage";   // unbewertet: kommt beim Weiterspielen nochmals
