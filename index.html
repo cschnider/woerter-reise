@@ -1507,6 +1507,7 @@ const Stimme = {
     if (nr !== this.nr) return true;
     const ctx = this.ctx;
     try { if (ctx.state !== "running") await ctx.resume(); } catch (e) { /* egal */ }
+    diag("Wiedergabe Web Audio, Kontext " + ctx.state);
     if (ctx.state !== "running") return null;
     this.halt();
     return new Promise(fertig => {
@@ -1536,6 +1537,7 @@ const Stimme = {
     if (!p) return false;
     const src = await this.quelle(datei);
     if (nr !== this.nr) return true; // inzwischen abgelöst: still bleiben, keine Ersatzstimme
+    diag("Wiedergabe <audio> (alter Weg)");
     this.halt();
     return new Promise(fertig => {
       let lief = false;
@@ -1575,6 +1577,24 @@ function zeigeStimmeFehlt(lang) {
 }
 
 const Erkenner = window.SpeechRecognition || window.webkitSpeechRecognition || null;
+
+/* Diagnose: Adresse mit #diagnose öffnen, dann protokolliert die App unten Mikrofon und Wiedergabe. */
+const FASSUNG = "12.11.2026 c";
+const DIAG = /diagnose/.test(location.hash);
+const diagT0 = Date.now();
+function diag(text) {
+  if (!DIAG) return;
+  let box = document.getElementById("diagBox");
+  if (!box) {
+    box = document.createElement("pre");
+    box.id = "diagBox";
+    box.style.cssText = "position:fixed;left:0;right:0;bottom:0;max-height:38vh;overflow:auto;margin:0;padding:6px 8px;font:11px/1.35 ui-monospace,monospace;background:rgba(0,0,0,.85);color:#9f9;z-index:9999;white-space:pre-wrap";
+    document.body.appendChild(box);
+    box.textContent = "Fassung " + FASSUNG + " · " + navigator.userAgent.replace(/^.*?\) /, "") + "\n";
+  }
+  box.textContent += ((Date.now() - diagT0) / 1000).toFixed(1) + "s " + text + "\n";
+  box.scrollTop = box.scrollHeight;
+}
 
 /* =====================================================================
    4. LOGIK
@@ -2459,6 +2479,7 @@ const Mikro = {
   hole() {
     if (!this.rec) {
       this.rec = new Erkenner();
+      diag("neuer Erkenner");
       this.rec.interimResults = true;   // iOS liefert oft nur Zwischenergebnisse
       this.rec.maxAlternatives = 5;
       this.rec.continuous = false;
@@ -2492,6 +2513,8 @@ async function starteMikro() {
   Stimme.freigeben(); // iOS: Tonausgabe loslassen, sonst bekommt die Spracherkennung keinen Ton
   Mikro.stopp();
   await Mikro.ruhig();
+  // iOS: Tonausgabe ganz anhalten, solange zugehört wird (die nächste Wiedergabe setzt sie fort)
+  try { if (Stimme.ctx && Stimme.ctx.state === "running") await Stimme.ctx.suspend(); } catch (e) { /* egal */ }
   ui.mikroStartet = false;
   if (ui.phase !== "frage") return;
   let rec;
@@ -2523,7 +2546,9 @@ async function starteMikro() {
     info.className = "mikro-info";
     info.textContent = text;
   };
+  for (const n of ["start", "audiostart", "soundstart", "speechstart", "speechend", "soundend", "audioend"]) rec["on" + n] = () => diag("  Erkenner: " + n);
   rec.onresult = ev => {
+    if (DIAG) { const x = ev.results[ev.results.length - 1]; diag("  Ergebnis" + (x.isFinal ? " (fertig)" : "") + ": " + (x[0] && x[0].transcript)); }
     if (!aktiv()) return;
     const r = ev.results[ev.results.length - 1];
     const alt = [...r].map(x => x.transcript.trim()).filter(Boolean);
@@ -2537,6 +2562,7 @@ async function starteMikro() {
     stille = setTimeout(() => auswerten(zwischen), 1200);
   };
   rec.onerror = ev => {
+    diag("  Erkenner: Fehler " + ev.error + (ev.message ? " – " + ev.message : ""));
     if (!aktiv()) return;
     if (zwischen.length) { auswerten(zwischen); return; }
     nichtsGehoert(ev.error === "not-allowed"
@@ -2548,6 +2574,7 @@ async function starteMikro() {
       : `Das hat nicht geklappt (${ev.error}). Nochmals 🎤 antippen.`);
   };
   rec.onend = () => {
+    diag("  Erkenner: end");
     Mikro.beendet();
     if (!aktiv()) return;
     if (zwischen.length) { auswerten(zwischen); return; }
@@ -2555,8 +2582,10 @@ async function starteMikro() {
   };
   // Spätestens nach 8 s auswerten, was gehört wurde (iOS beendet manchmal nicht von selbst)
   notbremse = setTimeout(() => { if (!aktiv()) return; if (zwischen.length) auswerten(zwischen); else { nichtsGehoert("Ich habe nichts gehört. Nochmals 🎤 oder «Lösung zeigen»."); Mikro.stopp(); } }, 8000);
+  diag("Mikro start #" + nr + " (" + rec.lang + "), Tippen aktiv: " + (navigator.userActivation ? navigator.userActivation.isActive : "?") + ", Kontext " + (Stimme.ctx ? Stimme.ctx.state : "–"));
   try { rec.start(); Mikro.laeuft = true; }
   catch (e) {
+    diag("  start() Fehler: " + e.name + " " + e.message);
     // Läuft noch eine alte Erkennung: einmal sauber neu (frischer Erkenner)
     try { Mikro.rec = null; rec = Mikro.hole(); } catch (e2) { /* unten */ }
     nichtsGehoert("Das Mikrofon war noch belegt. Nochmals 🎤 antippen.");
